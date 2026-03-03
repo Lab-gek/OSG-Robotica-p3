@@ -30,7 +30,7 @@ Camera
 | `robot_controller.py` | Decision logic → command |
 | `esp32_client.py` | HTTP client (sends commands to ESP32) |
 | `calibration.py` | Interactive HSV calibration tool |
-| `firmware/robot_controller.ino` | Reference ESP32 sketch (HTTP server + motor driver) |
+| `ESP32_script.ino` | ESP32 firmware (WiFi + WebServer + L298N motor driver) |
 | `requirements.txt` | Python dependencies |
 | `tests/` | Unit tests (pytest) |
 
@@ -75,32 +75,46 @@ Press **`q`** or **`ESC`** in the debug window, or **Ctrl-C** in the terminal, t
 
 ---
 
-## ESP32 setup
+## ESP32 setup  (`ESP32_script.ino`)
 
-### WiFi modes
+### WiFi – Station (STA) mode
 
-| Mode | When to use | `ESP32_BASE_URL` in `config.py` |
-|------|------------|--------------------------------|
-| **Access-Point (AP)** | Default – ESP32 creates its own WiFi | `http://192.168.4.1` |
-| **Station (STA)** | Both on the same router | IP printed on Serial monitor |
+The firmware connects to your local WiFi network (SSID **wojo** by default).  
+After uploading the sketch, open the Serial monitor at 115200 baud — the assigned IP address is printed there. Then set it in `config.py`:
 
-### HTTP API (what the Python side sends)
-
-```
-GET /command?action=<ACTION>&speed=<SPEED>
+```python
+ESP32_BASE_URL = "http://<IP_FROM_SERIAL_MONITOR>"
 ```
 
-| `action` | Meaning |
-|----------|---------|
-| `FORWARD` | Drive straight |
-| `LEFT` | Turn left |
-| `RIGHT` | Turn right |
-| `STOP` | Halt motors |
+### HTTP API
 
-`speed` is 0–100 (mapped to PWM duty cycle on the ESP32).
+The Python controller makes two types of GET requests:
 
-> **Note:** `firmware/robot_controller.ino` is a reference sketch that implements this API with an L298N motor driver.  
-> Merge the WiFi + WebServer sections into your existing `.ino` if you already have one.
+**1. Set speed** (sent whenever speed changes):
+```
+GET /speed?value=<0|25|50|75|100>
+```
+The value is a slider step matching the firmware's PWM map:
+
+| `value` | PWM duty (0–255) |
+|---------|-----------------|
+| 0       | 0 (motors off)  |
+| 25      | 200             |
+| 50      | ≈ 220           |
+| 75      | ≈ 237           |
+| 100     | 255             |
+
+**2. Set direction** (sent whenever action changes):
+```
+GET /forward    – both motors forward
+GET /left       – motor 1 back, motor 2 forward  (arc left)
+GET /right      – motor 1 forward, motor 2 back  (arc right)
+GET /stop       – all motor pins LOW (coast)
+GET /reverse    – both motors backward
+```
+
+> **Tip:** `SPEED_FORWARD` and `SPEED_TURN` in `config.py` default to `75` and `50`.  
+> Tune them if the robot is too fast / slow on your track.
 
 ---
 

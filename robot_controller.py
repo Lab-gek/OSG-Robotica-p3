@@ -30,11 +30,12 @@ from line_detector import LineDetectionResult
 from aruco_tracker import ArucoDetectionResult
 
 
-# Valid command tokens (must match ESP32 firmware expectations)
+# Valid command tokens (must match ESP32 firmware endpoints)
 CMD_FORWARD = "FORWARD"
 CMD_LEFT    = "LEFT"
 CMD_RIGHT   = "RIGHT"
 CMD_STOP    = "STOP"
+CMD_REVERSE = "REVERSE"
 
 
 @dataclass

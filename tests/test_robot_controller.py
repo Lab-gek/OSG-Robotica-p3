@@ -121,32 +121,48 @@ class TestEsp32ClientDryRun:
         from esp32_client import Esp32Client
         from robot_controller import RobotCommand
         client = Esp32Client(dry_run=True)
-        assert client.send(RobotCommand(CMD_FORWARD, 60)) is True
+        assert client.send(RobotCommand(CMD_FORWARD, 75)) is True
 
     def test_dry_run_deduplication(self):
         from esp32_client import Esp32Client
         from robot_controller import RobotCommand
         client = Esp32Client(dry_run=True)
-        cmd = RobotCommand(CMD_FORWARD, 60)
+        cmd = RobotCommand(CMD_FORWARD, 75)
         client.send(cmd)
         # Second identical command should be deduplicated → False
         assert client.send(cmd) is False
 
-    def test_dry_run_different_command_sent(self):
+    def test_dry_run_different_action_sent(self):
         from esp32_client import Esp32Client
         from robot_controller import RobotCommand
         client = Esp32Client(dry_run=True)
-        client.send(RobotCommand(CMD_FORWARD, 60))
-        # Different command → should be sent
-        assert client.send(RobotCommand(CMD_LEFT, 50)) is True
+        client.send(RobotCommand(CMD_FORWARD, 75))
+        # Different action, same speed → should send (only direction call)
+        assert client.send(RobotCommand(CMD_LEFT, 75)) is True
+
+    def test_dry_run_speed_change_sent(self):
+        from esp32_client import Esp32Client
+        from robot_controller import RobotCommand
+        client = Esp32Client(dry_run=True)
+        client.send(RobotCommand(CMD_FORWARD, 75))
+        # Same action, different speed → should send (only speed call)
+        assert client.send(RobotCommand(CMD_FORWARD, 50)) is True
 
     def test_stop_bypasses_deduplication(self):
         from esp32_client import Esp32Client
         from robot_controller import RobotCommand
         client = Esp32Client(dry_run=True)
         client.send(RobotCommand(CMD_STOP, 0))
-        # stop() resets last command → sends again
+        # stop() resets last state → sends again
         assert client.stop() is True
+
+    def test_last_action_and_speed_tracked_independently(self):
+        from esp32_client import Esp32Client
+        from robot_controller import RobotCommand
+        client = Esp32Client(dry_run=True)
+        client.send(RobotCommand(CMD_FORWARD, 75))
+        assert client._last_action == CMD_FORWARD
+        assert client._last_speed  == 75
 
 
 class TestLineDetectorLogic:

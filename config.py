@@ -57,20 +57,30 @@ CONTROL_ZONES = 5
 # frame centre, the robot is considered "on track" → send FORWARD.
 CENTRE_TOLERANCE = 30   # pixels
 
-# Speed levels sent to ESP32 (map to PWM duty-cycle % on the ESP32 side)
-SPEED_FORWARD = 60      # % duty cycle when driving straight
-SPEED_TURN    = 50      # % duty cycle for the faster wheel when turning
+# Speed levels sent to ESP32.
+# The firmware maps slider value 0→25→50→75→100 to PWM duty 0→200→220→237→255.
+# Valid values are multiples of 25 in [0, 100].
+SPEED_FORWARD = 75      # slider value for straight driving
+SPEED_TURN    = 50      # slider value when turning
 SPEED_STOP    = 0
 
 # ---------------------------------------------------------------------------
-# ESP32 HTTP API
+# ESP32 HTTP API  (ESP32_script.ino  –  Station / STA mode)
 # ---------------------------------------------------------------------------
-ESP32_BASE_URL = "http://192.168.4.1"   # Default ESP32 AP address; change to
-                                         # your network IP if using STA mode.
+# The ESP32 connects to your local WiFi (ssid "wojo" in the firmware).
+# Find the assigned IP on the Serial monitor after boot and set it below.
+ESP32_BASE_URL = "http://192.168.1.1"   # ← replace with your ESP32's IP address
 ESP32_TIMEOUT  = 0.5    # seconds – keep short so the control loop isn't blocked
 
-# Endpoint paths (GET /command?action=<ACTION>&speed=<SPEED>)
-ESP32_COMMAND_ENDPOINT = "/command"
+# Individual action endpoints
+ESP32_EP_FORWARD = "/forward"
+ESP32_EP_LEFT    = "/left"
+ESP32_EP_RIGHT   = "/right"
+ESP32_EP_STOP    = "/stop"
+ESP32_EP_REVERSE = "/reverse"
+
+# Speed endpoint  –  GET /speed?value=<0-100>
+ESP32_EP_SPEED   = "/speed"
 
 # ---------------------------------------------------------------------------
 # Debug / visualisation
