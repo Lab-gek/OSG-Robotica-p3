@@ -10,7 +10,7 @@
 
 // Replace with your network credentials
 const char* ssid     = "wojo";
-const char* password = "osg12345";
+const char* password = "x";
 
 // Create an instance of the WebServer on port 80
 WebServer server(80);
