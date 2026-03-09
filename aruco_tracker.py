@@ -152,7 +152,7 @@ class ArucoTracker:
 
         cv2.putText(
             vis,
-            f"ID:{result.marker_id} hdg:{result.heading_deg:.1f}°",
+            f"ID:{result.marker_id} hdg:{result.heading_deg:.1f}deg",
             (10, 50),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2,
         )

@@ -211,3 +211,104 @@ class TestLineDetectorLogic:
         result = detector.detect(frame)
         if result.found:
             assert result.error_x > 0
+
+
+class TestDebugVisualizer:
+    """Tests for DebugVisualizer.build_frame() – no camera or ESP32 required."""
+
+    def _make_frame(self):
+        import numpy as np
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    def test_build_frame_returns_ndarray(self):
+        import numpy as np
+        from visualizer import DebugVisualizer
+        from robot_controller import RobotCommand, CMD_FORWARD
+        vis = DebugVisualizer()
+        frame = self._make_frame()
+        out = vis.build_frame(
+            frame,
+            make_line(found=False),
+            make_aruco(found=False),
+            RobotCommand(CMD_FORWARD, 75),
+            fps=30.0,
+        )
+        assert isinstance(out, np.ndarray)
+        assert out.ndim == 3
+
+    def test_composite_is_wider_than_input(self):
+        from visualizer import DebugVisualizer
+        from robot_controller import RobotCommand, CMD_STOP
+        vis = DebugVisualizer()
+        frame = self._make_frame()
+        out = vis.build_frame(
+            frame,
+            make_line(found=False),
+            make_aruco(found=False),
+            RobotCommand(CMD_STOP, 0),
+        )
+        # Side-by-side layout: output must be at least twice as wide
+        assert out.shape[1] >= frame.shape[1] * 2
+
+    def test_composite_is_taller_than_input(self):
+        from visualizer import DebugVisualizer
+        from robot_controller import RobotCommand, CMD_STOP
+        vis = DebugVisualizer()
+        frame = self._make_frame()
+        out = vis.build_frame(
+            frame,
+            make_line(found=False),
+            make_aruco(found=False),
+            RobotCommand(CMD_STOP, 0),
+        )
+        # Status bar adds height
+        assert out.shape[0] > frame.shape[0]
+
+    def test_scale_reduces_output_size(self):
+        from visualizer import DebugVisualizer
+        from robot_controller import RobotCommand, CMD_FORWARD
+        vis_full  = DebugVisualizer(scale=1.0)
+        vis_half  = DebugVisualizer(scale=0.5)
+        frame = self._make_frame()
+        out_full = vis_full.build_frame(
+            frame, make_line(found=False), make_aruco(found=False),
+            RobotCommand(CMD_FORWARD, 75),
+        )
+        out_half = vis_half.build_frame(
+            frame, make_line(found=False), make_aruco(found=False),
+            RobotCommand(CMD_FORWARD, 75),
+        )
+        assert out_half.shape[1] < out_full.shape[1]
+        assert out_half.shape[0] < out_full.shape[0]
+
+    def test_mask_panel_shows_detected_pixels(self):
+        """When a mask is provided, the right panel should have non-zero green pixels."""
+        import numpy as np
+        from visualizer import DebugVisualizer
+        from robot_controller import RobotCommand, CMD_FORWARD
+        from line_detector import LineDetectionResult
+
+        vis = DebugVisualizer()
+        frame = self._make_frame()
+
+        line_result = LineDetectionResult()
+        line_result.found = False
+        # Provide a mask with a bright stripe in the middle
+        mask = np.zeros((480, 640), dtype=np.uint8)
+        mask[200:280, 300:340] = 255
+        line_result.mask = mask
+
+        out = vis.build_frame(
+            frame, line_result, make_aruco(found=False),
+            RobotCommand(CMD_FORWARD, 75),
+        )
+        # The right panel starts at column 640 in the composite.
+        # Some pixels in that region should be green (0, 220, 0).
+        right_panel = out[:480, 640:]
+        green_pixels = np.all(right_panel == (0, 220, 0), axis=2)
+        assert green_pixels.sum() > 0
+
+    def test_window_title_is_string(self):
+        from visualizer import DebugVisualizer
+        assert isinstance(DebugVisualizer.WINDOW_TITLE, str)
+        assert len(DebugVisualizer.WINDOW_TITLE) > 0

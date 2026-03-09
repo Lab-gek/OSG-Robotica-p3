@@ -46,6 +46,7 @@ from line_detector  import LineDetector
 from aruco_tracker  import ArucoTracker
 from robot_controller import RobotController
 from esp32_client   import Esp32Client
+from visualizer     import DebugVisualizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,6 +109,7 @@ def main() -> None:
     tracker    = ArucoTracker()
     controller = RobotController()
     client     = Esp32Client(base_url=esp32_url, dry_run=args.dry_run)
+    visualizer = DebugVisualizer(scale=config.DEBUG_WINDOW_SCALE)
 
     logger.info("System ready.  Camera=%s  ESP32=%s  dry_run=%s",
                 camera_source, esp32_url, args.dry_run)
@@ -145,25 +147,10 @@ def main() -> None:
                 fps_timer   = now
 
             if show_display:
-                vis = LineDetector.draw_debug(frame, line_result)
-                vis = ArucoTracker.draw_debug(vis,   aruco_result)
-
-                # FPS counter
-                cv2.putText(
-                    vis,
-                    f"FPS: {fps_display:.1f}  CMD: {command.action}",
-                    (10, vis.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1,
+                vis = visualizer.build_frame(
+                    frame, line_result, aruco_result, command, fps_display
                 )
-
-                scale = config.DEBUG_WINDOW_SCALE
-                if scale != 1.0:
-                    vis = cv2.resize(
-                        vis,
-                        (int(vis.shape[1] * scale), int(vis.shape[0] * scale))
-                    )
-
-                cv2.imshow("Robot Control – Debug", vis)
+                cv2.imshow(DebugVisualizer.WINDOW_TITLE, vis)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord('q'), 27):
                     logger.info("Quit key pressed.")
