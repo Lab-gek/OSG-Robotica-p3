@@ -1,15 +1,17 @@
 """
 line_detector.py – Detects a black line on a yellowish (wooden-plank) background.
 
-Returns the X-coordinate of the line's centroid in each row of a region-of-interest,
-plus the overall centroid that the controller uses to steer.
+The camera is mounted **overhead** (fixed, looking straight down at the track).
+Returns the centroid of the largest black-line contour so that the controller
+can compute the robot's lateral deviation from the line using the ArUco pose.
 
 IRL translation notes
 ---------------------
 - Lighting is the #1 enemy.  Run calibration.py first to re-tune LINE_HSV_LOWER /
   LINE_HSV_UPPER for your specific environment.
-- Shadows cast by the robot itself can create false-positive dark patches.  The
-  MIN_CONTOUR_AREA filter in config.py helps here.
+- With an overhead camera the full frame is valid; ROI_TOP_FRACTION in config.py
+  defaults to 0.0 (no skip).  Increase it only if a static obstacle at the top of
+  the frame causes false positives.
 - If the floor has visible wood-grain or other dark patterns, increase
   LINE_MIN_CONTOUR_AREA to filter them out.
 """
@@ -50,8 +52,9 @@ class LineDetector:
     frame_width, frame_height : int
         Expected frame dimensions (used to compute the centre reference).
     roi_top_fraction : float
-        Fraction of the frame height to skip from the top (avoids tracking the
-        robot's own body which often occludes the upper part of the frame).
+        Fraction of the frame height to skip from the top.  With an overhead
+        camera this should be 0.0 (full frame); increase only if the top of
+        the frame contains a static obstacle that causes false positives.
     """
 
     def __init__(
@@ -60,14 +63,15 @@ class LineDetector:
         hsv_upper: tuple = config.LINE_HSV_UPPER,
         frame_width: int = config.FRAME_WIDTH,
         frame_height: int = config.FRAME_HEIGHT,
-        roi_top_fraction: float = 0.4,
+        roi_top_fraction: float = config.ROI_TOP_FRACTION,
     ):
         self.hsv_lower = np.array(hsv_lower, dtype=np.uint8)
         self.hsv_upper = np.array(hsv_upper, dtype=np.uint8)
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.frame_centre_x = frame_width // 2
-        # Only look at the bottom portion of the frame (ahead of the robot)
+        # Skip the top portion of the frame if specified (0.0 = full frame).
+        # With an overhead camera there is nothing to skip, so the default is 0.0.
         self.roi_y_start = int(frame_height * roi_top_fraction)
 
         kernel_size = config.MORPH_KERNEL_SIZE

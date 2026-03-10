@@ -17,21 +17,21 @@ from aruco_tracker import ArucoDetectionResult
 from robot_controller import RobotController, RobotCommand, CMD_FORWARD, CMD_LEFT, CMD_RIGHT, CMD_STOP
 
 
-def make_line(found=True, error_x=0):
+def make_line(found=True, error_x=0, centroid_y=None):
     r = LineDetectionResult()
     r.found = found
     r.error_x = error_x
     r.centroid_x = (config.FRAME_WIDTH // 2) + error_x
-    r.centroid_y = config.FRAME_HEIGHT // 2
+    r.centroid_y = centroid_y if centroid_y is not None else config.FRAME_HEIGHT // 2
     return r
 
 
-def make_aruco(found=True, heading_deg=90.0):
+def make_aruco(found=True, heading_deg=180.0, centre_x=None, centre_y=None):
     r = ArucoDetectionResult()
     r.found = found
     r.heading_deg = heading_deg
-    r.centre_x = config.FRAME_WIDTH / 2
-    r.centre_y = config.FRAME_HEIGHT / 2
+    r.centre_x = centre_x if centre_x is not None else config.FRAME_WIDTH / 2
+    r.centre_y = centre_y if centre_y is not None else config.FRAME_HEIGHT / 2
     return r
 
 
@@ -91,29 +91,106 @@ class TestRobotControllerHeadingCorrection:
         self.ctrl = RobotController(centre_tolerance=30, heading_tolerance=15.0)
 
     def test_no_heading_correction_when_straight(self):
-        # Line centred AND robot pointing straight up (90°) → FORWARD
-        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=90.0))
+        # Line centred AND robot pointing left (180°, the desired heading) → FORWARD
+        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=180.0))
         assert cmd.action == CMD_FORWARD
 
     def test_heading_correction_left_when_rotated_cw(self):
-        # Robot angled clockwise (heading > 90°) → needs LEFT correction
-        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=120.0))
+        # Robot rotated clockwise past desired heading (heading > 180°) → needs LEFT correction
+        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=210.0))
         assert cmd.action == CMD_LEFT
 
     def test_heading_correction_right_when_rotated_ccw(self):
-        # Robot angled counter-clockwise (heading < 90°) → needs RIGHT correction
-        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=60.0))
+        # Robot rotated counter-clockwise (heading < 180°) → needs RIGHT correction
+        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=150.0))
         assert cmd.action == CMD_RIGHT
 
     def test_no_heading_correction_within_tolerance(self):
         # Heading error of 10° is within the 15° tolerance → FORWARD
-        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=100.0))
+        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=True, heading_deg=190.0))
         assert cmd.action == CMD_FORWARD
 
-    def test_heading_correction_only_when_line_centred(self):
-        # Line is already off-centre → line error takes priority, not heading
-        cmd = self.ctrl.compute(make_line(error_x=80), make_aruco(found=True, heading_deg=60.0))
-        assert cmd.action == CMD_RIGHT  # from line error, not heading
+    def test_heading_correction_only_when_lateral_error_within_tolerance(self):
+        # Robot is off the line laterally → lateral error takes priority over heading.
+        # line at x=400, robot at x=320, heading=150° (CCW from desired 180°)
+        # dx=-80, dy=0 → lateral_err = -80*sin(150°) = -40 → outside tolerance → CMD_RIGHT
+        cmd = self.ctrl.compute(make_line(error_x=80), make_aruco(found=True, heading_deg=150.0))
+        assert cmd.action == CMD_RIGHT  # from lateral error, not heading correction
+
+
+class TestRobotControllerOverheadCamera:
+    """
+    Tests for the overhead-camera mode: both ArUco and line detected.
+
+    The robot travels from RIGHT to LEFT (desired heading ≈ 180°).
+    Lateral error is the displacement of the robot from the line, projected
+    onto the robot's lateral (right) axis.
+    """
+
+    def setup_method(self):
+        self.ctrl = RobotController(centre_tolerance=30, heading_tolerance=15.0)
+
+    def test_forward_when_robot_on_line(self):
+        # Robot centre coincides with line centroid → zero lateral error → FORWARD
+        cmd = self.ctrl.compute(
+            make_line(error_x=0),
+            make_aruco(found=True, heading_deg=180.0),
+        )
+        assert cmd.action == CMD_FORWARD
+        assert cmd.speed == config.SPEED_FORWARD
+
+    def test_forward_within_lateral_tolerance(self):
+        # Robot slightly below the line (dy=10 px) – within 30 px tolerance → FORWARD
+        # heading=180°: right-axis points UP → lateral_err = -dy = -10 → within tol
+        cmd = self.ctrl.compute(
+            make_line(error_x=0),
+            make_aruco(found=True, heading_deg=180.0, centre_y=config.FRAME_HEIGHT / 2 + 10),
+        )
+        assert cmd.action == CMD_FORWARD
+
+    def test_left_when_robot_above_line_heading_left(self):
+        # Robot above the line (robot_y < line_y, dy < 0), heading = 180°.
+        # lateral_err = −dy > 0 → robot is to the RIGHT of the line → CMD_LEFT.
+        cmd = self.ctrl.compute(
+            make_line(error_x=0),                                        # line  y=240
+            make_aruco(found=True, heading_deg=180.0, centre_y=190.0),   # robot y=190
+        )
+        assert cmd.action == CMD_LEFT
+        assert cmd.speed == config.SPEED_TURN
+
+    def test_right_when_robot_below_line_heading_left(self):
+        # Robot below the line (robot_y > line_y, dy > 0), heading = 180°.
+        # lateral_err = −dy < 0 → robot is to the LEFT of the line → CMD_RIGHT.
+        cmd = self.ctrl.compute(
+            make_line(error_x=0),                                        # line  y=240
+            make_aruco(found=True, heading_deg=180.0, centre_y=290.0),   # robot y=290
+        )
+        assert cmd.action == CMD_RIGHT
+        assert cmd.speed == config.SPEED_TURN
+
+    def test_fallback_to_line_error_when_no_aruco(self):
+        # No ArUco → fall back to line.error_x steering
+        cmd = self.ctrl.compute(make_line(error_x=80), make_aruco(found=False))
+        assert cmd.action == CMD_RIGHT
+
+    def test_fallback_forward_when_no_aruco_and_centred(self):
+        cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=False))
+        assert cmd.action == CMD_FORWARD
+
+    def test_lateral_error_heading_0_right_of_line(self):
+        # Robot heading = 0° (pointing right), robot directly below the line.
+        # right-axis for 0° heading is DOWN (increasing Y).
+        # dy > 0 → robot is to the robot's right of the line → CMD_LEFT.
+        dy = 50.0
+        cmd = self.ctrl.compute(
+            make_line(error_x=0),
+            make_aruco(found=True, heading_deg=0.0, centre_y=config.FRAME_HEIGHT / 2 + dy),
+        )
+        assert cmd.action == CMD_LEFT
+
+    def test_stop_when_line_lost(self):
+        cmd = self.ctrl.compute(make_line(found=False), make_aruco(found=True, heading_deg=180.0))
+        assert cmd.action == CMD_STOP
 
 
 class TestEsp32ClientDryRun:
