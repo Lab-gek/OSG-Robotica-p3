@@ -85,7 +85,11 @@ def open_camera(source) -> cv2.VideoCapture:
     except (TypeError, ValueError):
         pass  # keep as string (URL / device path)
 
-    cap = cv2.VideoCapture(source)
+    # Use the V4L2 backend explicitly on Linux for integer indices.
+    # The default (GStreamer / libv4l) wrapper can hold back valid frames, causing
+    # the camera panel to appear black until the buffer drains.
+    backend = cv2.CAP_V4L2 if isinstance(source, int) else cv2.CAP_ANY
+    cap = cv2.VideoCapture(source, backend)
     if not cap.isOpened():
         logger.error("Cannot open camera: %s", source)
         sys.exit(1)
@@ -105,6 +109,14 @@ def main() -> None:
 
     # ------------------------------------------------------------------ setup
     cap        = open_camera(camera_source)
+
+    # Camera warm-up: some USB cameras return black frames until the sensor
+    # stabilises.  camera_diagnostic.py does the same (1 s sleep + 10 reads).
+    logger.info("Warming up camera…")
+    time.sleep(1.0)
+    for _ in range(20):
+        cap.read()
+
     detector   = LineDetector()
     tracker    = ArucoTracker()
     controller = RobotController()
