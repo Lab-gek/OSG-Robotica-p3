@@ -40,6 +40,7 @@ import sys
 import time
 
 import cv2
+import numpy as np
 
 import config
 from line_detector  import LineDetector
@@ -85,11 +86,7 @@ def open_camera(source) -> cv2.VideoCapture:
     except (TypeError, ValueError):
         pass  # keep as string (URL / device path)
 
-    # Use the V4L2 backend explicitly on Linux for integer indices.
-    # The default (GStreamer / libv4l) wrapper can hold back valid frames, causing
-    # the camera panel to appear black until the buffer drains.
-    backend = cv2.CAP_V4L2 if isinstance(source, int) else cv2.CAP_ANY
-    cap = cv2.VideoCapture(source, backend)
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         logger.error("Cannot open camera: %s", source)
         sys.exit(1)
@@ -97,6 +94,13 @@ def open_camera(source) -> cv2.VideoCapture:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS,          config.FRAME_FPS)
+
+    actual_w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = cap.get(cv2.CAP_PROP_FPS)
+    logger.info("Camera opened: requested %dx%d@%d  got %dx%d@%.1f",
+                config.FRAME_WIDTH, config.FRAME_HEIGHT, config.FRAME_FPS,
+                actual_w, actual_h, actual_fps)
     return cap
 
 
@@ -117,6 +121,19 @@ def main() -> None:
     for _ in range(20):
         cap.read()
 
+    # Check a post-warmup frame so we can diagnose black-camera issues early.
+    ret_check, check_frame = cap.read()
+    if ret_check and check_frame is not None:
+        brightness = float(np.mean(cv2.cvtColor(check_frame, cv2.COLOR_BGR2GRAY)))
+        logger.info("Post-warmup frame: shape=%s  mean_brightness=%.1f%s",
+                    check_frame.shape, brightness,
+                    "  <-- VERY DARK, may appear black" if brightness < 10 else "")
+    else:
+        logger.warning("Post-warmup frame read failed (ret=%s)", ret_check)
+
+    logger.info("show_display=%s  (no_display=%s, SHOW_DEBUG_WINDOW=%s)",
+                show_display, args.no_display, config.SHOW_DEBUG_WINDOW)
+
     detector   = LineDetector()
     tracker    = ArucoTracker()
     controller = RobotController()
@@ -129,6 +146,10 @@ def main() -> None:
     fps_timer   = time.time()
     frame_count = 0
     fps_display = 0.0
+
+    if show_display:
+        cv2.namedWindow(DebugVisualizer.WINDOW_TITLE, cv2.WINDOW_NORMAL)
+        logger.info("Debug window created: %r", DebugVisualizer.WINDOW_TITLE)
 
     try:
         while True:
@@ -155,6 +176,17 @@ def main() -> None:
             now = time.time()
             if now - fps_timer >= 1.0:
                 fps_display = frame_count / (now - fps_timer)
+                brightness  = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                logger.info(
+                    "FPS=%.1f  brightness=%.1f  line=%s(err=%+d)  aruco=%s  cmd=%s  display=%s",
+                    fps_display,
+                    brightness,
+                    "FOUND" if line_result.found  else "NONE",
+                    line_result.error_x if line_result.found else 0,
+                    f"FOUND(hdg={aruco_result.heading_deg:.1f})" if aruco_result.found else "NONE",
+                    command.action,
+                    show_display,
+                )
                 frame_count = 0
                 fps_timer   = now
 
@@ -162,6 +194,10 @@ def main() -> None:
                 vis = visualizer.build_frame(
                     frame, line_result, aruco_result, command, fps_display
                 )
+                if frame_count == 1:  # log once per second
+                    logger.info("imshow frame shape=%s  dtype=%s  brightness=%.1f",
+                                vis.shape, vis.dtype,
+                                float(np.mean(cv2.cvtColor(vis, cv2.COLOR_BGR2GRAY))))
                 cv2.imshow(DebugVisualizer.WINDOW_TITLE, vis)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord('q'), 27):
