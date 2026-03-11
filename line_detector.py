@@ -14,7 +14,12 @@ IRL translation notes
   the frame causes false positives.
 - If the floor has visible wood-grain or other dark patterns, increase
   LINE_MIN_CONTOUR_AREA to filter them out.
+- The contour stored in LineDetectionResult is used by the controller to compute
+  nearest_point_on_contour() and local_line_heading(), which are the key helpers
+  for correct corner navigation.
 """
+
+import math
 
 import cv2
 import numpy as np
@@ -156,6 +161,108 @@ class LineDetector:
         result.contour = adjusted_contour
 
         return result
+
+    # ------------------------------------------------------------------
+    # Static helpers for corner-aware steering (used by RobotController)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def nearest_point_on_contour(
+        contour: np.ndarray,
+        ref_x: float,
+        ref_y: float,
+    ) -> tuple:
+        """
+        Return the point on *contour* closest to (*ref_x*, *ref_y*).
+
+        This is used by the controller instead of the overall line centroid
+        when computing the lateral steering error.  At corners the whole-line
+        centroid is biased toward the inside of the bend; the nearest contour
+        point is always on the part of the line that is directly adjacent to
+        the robot, giving a correct steering signal throughout the turn.
+
+        Parameters
+        ----------
+        contour : np.ndarray
+            Contour array as returned by ``cv2.findContours`` (shape N×1×2).
+        ref_x, ref_y : float
+            Reference position (typically the robot's ArUco centre).
+
+        Returns
+        -------
+        tuple[float, float]
+            ``(nearest_x, nearest_y)`` pixel coordinates of the nearest
+            contour vertex.
+        """
+        pts = contour[:, 0, :].astype(np.float64)
+        dists = np.hypot(pts[:, 0] - ref_x, pts[:, 1] - ref_y)
+        idx = int(np.argmin(dists))
+        return float(pts[idx, 0]), float(pts[idx, 1])
+
+    @staticmethod
+    def local_line_heading(
+        contour: np.ndarray,
+        near_x: float,
+        near_y: float,
+        robot_heading_deg: float,
+        search_radius: float = config.LINE_LOOKAHEAD_RADIUS,
+    ) -> float:
+        """
+        Estimate the local direction of the line near (*near_x*, *near_y*).
+
+        A straight line is fitted through all contour points that fall within
+        *search_radius* pixels of the anchor point.  The result is used by the
+        controller for heading correction so that the robot aligns with the
+        *actual* line direction — including after a corner — rather than being
+        locked to a fixed ``ROBOT_DESIRED_HEADING``.
+
+        Direction ambiguity (a line has two valid headings, 180° apart) is
+        resolved by choosing the angle closest to *robot_heading_deg*, so the
+        correction is always a small nudge rather than a 180° reversal.
+
+        Falls back to *robot_heading_deg* when fewer than 4 nearby contour
+        points are found.
+
+        Parameters
+        ----------
+        contour : np.ndarray
+            Contour array (shape N×1×2).
+        near_x, near_y : float
+            Anchor point (usually the nearest contour point to the robot).
+        robot_heading_deg : float
+            Current robot heading (degrees) used to disambiguate direction.
+        search_radius : float
+            Radius within which contour points are included in the line fit.
+            Tune via ``LINE_LOOKAHEAD_RADIUS`` in config.py.
+
+        Returns
+        -------
+        float
+            Estimated local line heading in degrees [0, 360).
+        """
+        pts = contour[:, 0, :].astype(np.float64)
+        dists = np.hypot(pts[:, 0] - near_x, pts[:, 1] - near_y)
+        nearby = pts[dists <= search_radius]
+
+        if len(nearby) < 4:
+            return robot_heading_deg % 360
+
+        line_params = cv2.fitLine(
+            nearby.astype(np.float32).reshape(-1, 1, 2),
+            cv2.DIST_L2, 0, 0.01, 0.01,
+        )
+        params = line_params.flatten()
+        vx, vy = float(params[0]), float(params[1])
+        # Same heading convention as ArUco: atan2(-vy, vx) because image Y is flipped
+        heading = math.degrees(math.atan2(-vy, vx)) % 360
+
+        # Resolve the 180° direction ambiguity: pick the angle closest to
+        # robot_heading_deg so the correction is always a small adjustment.
+        diff = ((heading - robot_heading_deg + 180) % 360) - 180
+        if abs(diff) > 90:
+            heading = (heading + 180) % 360
+
+        return heading
 
     @staticmethod
     def draw_debug(frame: np.ndarray, result: LineDetectionResult) -> np.ndarray:

@@ -224,8 +224,55 @@ The biggest challenge when moving from a lab setup to a real track:
 | Line not detected (shadows, glare) | Re-run `calibration.py`, lower `V_max` slider |
 | False positives (wood grain detected) | Increase `LINE_MIN_CONTOUR_AREA` in `config.py` |
 | Robot oscillates left/right | Increase `CENTRE_TOLERANCE` or lower `SPEED_TURN` |
+| Robot starts turning too early at corners | Decrease `LINE_LOOKAHEAD_RADIUS` in `config.py` |
+| Robot turns too late / misses the corner | Increase `LINE_LOOKAHEAD_RADIUS` in `config.py` |
 | ArUco marker lost at certain angles | Use a larger marker; ensure good overhead lighting |
 | Commands not reaching ESP32 | Check WiFi connection; increase `ESP32_TIMEOUT` |
+
+---
+
+## Corner handling
+
+Yes — the code is designed to work with corners.
+
+### How the overhead-camera steering handles corners
+
+The controller uses two mechanisms that together enable reliable corner navigation:
+
+**1. Nearest-point lateral error** (`LineDetector.nearest_point_on_contour`)
+
+On a straight segment the "line position" is well-represented by the centroid of the
+detected contour.  At a corner, however, the entire L-shaped (or U-shaped) contour is
+visible at once — and its **centroid is biased toward the inside of the bend**, not the
+part of the line directly ahead of the robot.
+
+To fix this, the controller finds the **nearest point on the contour** to the robot's
+ArUco position and uses that as the steering reference.  This always points to the
+adjacent part of the line regardless of how much of the corner is visible.
+
+**2. Adaptive heading correction** (`LineDetector.local_line_heading`)
+
+Without this fix, the heading correction always tries to point the robot at
+`ROBOT_DESIRED_HEADING` (180° = left by default).  Once the robot has turned 90° around
+a corner, this would produce a heading error of −90° and issue `CMD_RIGHT`, **reversing
+the completed turn**.
+
+Instead, the controller fits a straight line through all contour points within
+`LINE_LOOKAHEAD_RADIUS` pixels of the nearest point (default 80 px) to estimate the
+**local line direction**.  The heading correction targets this local direction, so:
+
+- On a straight segment → behaves identically to the old fixed-heading correction.
+- Approaching a corner → smoothly transitions the target heading as the robot turns.
+- After the corner → locks to the new direction immediately.
+
+### Track design tips for reliable corner navigation
+
+| Recommendation | Reason |
+|----------------|--------|
+| Corner radius ≥ 10 cm | Tighter corners may need very low `SPEED_TURN` to avoid overshooting |
+| Line width 3–5 cm | Wider lines give more contour points → better local-direction estimate |
+| Consistent lighting across the corner | Shadows at the bend can break the HSV mask mid-corner |
+| `LINE_LOOKAHEAD_RADIUS` = 60–100 px | 80 px (default) works for most 640×480 setups |
 
 ---
 

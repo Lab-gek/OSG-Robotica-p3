@@ -10,23 +10,33 @@ Steering algorithm
 ------------------
 When the ArUco marker (robot position) is visible:
 
-  1. Compute the *lateral error* – how far the robot centre is displaced from
-     the line centroid, measured perpendicular to the robot's current heading.
+  1. Find the point on the detected line **contour** that is closest to the
+     robot (``LineDetector.nearest_point_on_contour``).  Using the nearest
+     point — rather than the overall line centroid — is critical for corners:
+     the centroid of an L-shaped contour is biased toward the inside of the
+     bend, whereas the nearest contour point is always on the segment of the
+     line that is adjacent to the robot.
+
+  2. Compute the *lateral error* – how far the robot centre is displaced from
+     the nearest line point, measured perpendicular to the robot's current
+     heading.
 
        lateral_err = Δx · sin(θ) + Δy · cos(θ)
 
-     where (Δx, Δy) = robot_pos − line_centroid and θ is the robot heading in
-     radians.  Positive lateral_err means the robot is to the RIGHT of the
-     line; negative means it is to the LEFT.
+     where (Δx, Δy) = robot_pos − nearest_line_point and θ is the robot
+     heading in radians.  Positive lateral_err means the robot is to the
+     RIGHT of the line; negative means it is to the LEFT.
 
-  2. If |lateral_err| ≤ CENTRE_TOLERANCE → FORWARD (robot is on the line).
-  3. If lateral_err > 0 → LEFT  (robot drifted right of the line).
-  4. If lateral_err < 0 → RIGHT (robot drifted left of the line).
+  3. If |lateral_err| ≤ CENTRE_TOLERANCE → FORWARD (robot is on the line).
+  4. If lateral_err > 0 → LEFT  (robot drifted right of the line).
+  5. If lateral_err < 0 → RIGHT (robot drifted left of the line).
 
-  5. Heading correction (applied on top of lateral control when the robot is
-     centred): if the robot's heading deviates from ROBOT_DESIRED_HEADING by
-     more than heading_tolerance, a corrective turn is issued so the robot
-     stays aligned with the line direction.
+  6. Heading correction (applied on top of lateral control when the robot is
+     centred): the *local* line direction at the nearest point is estimated
+     via ``LineDetector.local_line_heading`` and used as the target heading.
+     On a straight segment this matches ``ROBOT_DESIRED_HEADING``; at a
+     corner it adapts to the turn so the robot aligns with the new direction
+     instead of fighting it.
 
 When the ArUco marker is NOT visible (fallback):
 
@@ -46,9 +56,12 @@ IRL translation notes
   Start wide (50 px) and tighten as detection becomes reliable.
 - If the robot overshoots turns (oscillates left/right), increase tolerance or
   reduce SPEED_TURN.
-- ROBOT_DESIRED_HEADING defaults to 180° (pointing left) because the robot
-  travels from the right side of the frame to the left side.  Change it in
-  config.py if the camera or track orientation is different.
+- LINE_LOOKAHEAD_RADIUS (config.py) controls how far around the nearest point
+  the controller looks to estimate the local line direction.  80 px works well
+  for a 640×480 frame; decrease it if the robot starts turning too early at
+  corners.
+- ROBOT_DESIRED_HEADING is now only a fallback (used when no contour is
+  available).  Normal operation uses the dynamic local line heading.
 """
 
 import math
@@ -56,7 +69,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import config
-from line_detector import LineDetectionResult
+from line_detector import LineDetectionResult, LineDetector
 from aruco_tracker import ArucoDetectionResult
 
 
@@ -118,7 +131,8 @@ class RobotController:
         Priority order:
         1. If no line detected → STOP (safe default).
         2. If both ArUco and line are detected → overhead-camera steering using
-           the lateral error between the robot position and the line centroid.
+           the lateral error between the robot position and the *nearest point
+           on the line contour* (handles corners correctly).
         3. If only line detected (no ArUco) → fallback: steer toward the line
            using the line's horizontal offset from the frame centre.
         """
@@ -132,9 +146,21 @@ class RobotController:
                 and aruco.centre_x is not None and aruco.centre_y is not None \
                 and line.centroid_x is not None and line.centroid_y is not None:
 
-            # Vector from line centroid to robot centre (image coordinates)
-            dx = aruco.centre_x - line.centroid_x
-            dy = aruco.centre_y - line.centroid_y
+            # Find the nearest point on the line contour to the robot.
+            # Using the nearest point instead of the overall centroid ensures
+            # correct lateral error at corners: the centroid of an L-shaped
+            # contour is biased toward the inside of the bend, which would
+            # steer the robot away from the actual line segment ahead.
+            if line.contour is not None:
+                nearest_x, nearest_y = LineDetector.nearest_point_on_contour(
+                    line.contour, aruco.centre_x, aruco.centre_y
+                )
+            else:
+                nearest_x, nearest_y = float(line.centroid_x), float(line.centroid_y)
+
+            # Vector from nearest line point to robot centre (image coordinates)
+            dx = aruco.centre_x - nearest_x
+            dy = aruco.centre_y - nearest_y
 
             # Project displacement onto the robot's lateral (right) axis.
             # In image coordinates: heading 0° = right, 90° = up (-Y), 180° = left.
@@ -158,11 +184,19 @@ class RobotController:
                 speed  = config.SPEED_TURN
 
             # -- Heading correction (only when laterally on track) ------------
-            # Ensure the robot is facing the correct direction (ROBOT_DESIRED_HEADING).
-            # A positive heading_error means the robot has rotated clockwise from
-            # the desired heading → turn LEFT to correct.
+            # Use the LOCAL line direction at the nearest point as the target
+            # heading.  On straight segments this matches ROBOT_DESIRED_HEADING;
+            # at a corner the local direction adapts to the turn so the robot
+            # aligns with the new segment instead of fighting the bend.
             if action == CMD_FORWARD:
-                heading_error = aruco.heading_deg - config.ROBOT_DESIRED_HEADING
+                if line.contour is not None:
+                    target_heading = LineDetector.local_line_heading(
+                        line.contour, nearest_x, nearest_y, aruco.heading_deg
+                    )
+                else:
+                    target_heading = config.ROBOT_DESIRED_HEADING
+
+                heading_error = aruco.heading_deg - target_heading
                 # Normalise to [-180, 180]
                 while heading_error >  180: heading_error -= 360
                 while heading_error < -180: heading_error += 360

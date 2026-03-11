@@ -67,7 +67,18 @@ CENTRE_TOLERANCE = 30   # pixels
 # Desired heading for the robot in degrees (0 = right, 90 = up, 180 = left).
 # The robot follows the line from the RIGHT side of the screen to the LEFT,
 # so its desired heading is 180° (pointing left in the overhead camera view).
+# This value is used only when no line contour is available (i.e. as a fallback).
+# During normal operation the controller derives the target heading dynamically
+# from the local line direction so that corners are navigated correctly.
 ROBOT_DESIRED_HEADING = 180.0
+
+# Radius (pixels) used to sample nearby contour points when estimating the
+# local line direction at the nearest point.  With a 640×480 overhead camera
+# and a ~3–4 cm wide line, 60–100 px works well.
+#   Increase  → smoother direction estimation, but may blend two segments at a
+#               sharp corner, causing the robot to start turning slightly early.
+#   Decrease  → tighter to the corner, but noisier on straight segments.
+LINE_LOOKAHEAD_RADIUS = 80  # pixels
 
 # Speed levels sent to ESP32.
 # The firmware maps slider value 0→25→50→75→100 to PWM duty 0→200→220→237→255.

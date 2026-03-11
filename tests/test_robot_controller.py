@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 
 import config
-from line_detector import LineDetectionResult
+from line_detector import LineDetectionResult, LineDetector
 from aruco_tracker import ArucoDetectionResult
 from robot_controller import RobotController, RobotCommand, CMD_FORWARD, CMD_LEFT, CMD_RIGHT, CMD_STOP
 
@@ -389,3 +389,183 @@ class TestDebugVisualizer:
         from visualizer import DebugVisualizer
         assert isinstance(DebugVisualizer.WINDOW_TITLE, str)
         assert len(DebugVisualizer.WINDOW_TITLE) > 0
+
+
+# ---------------------------------------------------------------------------
+# Corner-handling tests
+# ---------------------------------------------------------------------------
+
+class TestNearestPointOnContour:
+    """Unit tests for LineDetector.nearest_point_on_contour."""
+
+    def _horizontal_contour(self):
+        import numpy as np
+        # Horizontal line of contour points at y=240, x=100..400
+        pts = [[[x, 240]] for x in range(100, 401, 10)]
+        return np.array(pts, dtype=np.int32)
+
+    def test_nearest_to_exact_point(self):
+        contour = self._horizontal_contour()
+        nx, ny = LineDetector.nearest_point_on_contour(contour, 250.0, 240.0)
+        assert nx == 250.0
+        assert ny == 240.0
+
+    def test_nearest_when_robot_offset_vertically(self):
+        # Robot is 20 px above the horizontal line – nearest should still be on the line
+        contour = self._horizontal_contour()
+        nx, ny = LineDetector.nearest_point_on_contour(contour, 250.0, 220.0)
+        assert ny == 240.0  # must be on the line (not above it)
+        assert abs(nx - 250.0) < 15  # close to x=250
+
+    def test_nearest_point_right_end(self):
+        import numpy as np
+        contour = self._horizontal_contour()
+        # Reference point beyond the right end of the contour
+        nx, ny = LineDetector.nearest_point_on_contour(contour, 450.0, 240.0)
+        assert nx == 400.0  # rightmost point
+
+    def test_nearest_point_four_corner_contour(self):
+        import numpy as np
+        # Square contour
+        contour = np.array(
+            [[[10, 10]], [[100, 10]], [[100, 100]], [[10, 100]]], dtype=np.int32
+        )
+        nx, ny = LineDetector.nearest_point_on_contour(contour, 5.0, 5.0)
+        # (10, 10) is the closest corner
+        assert nx == 10.0 and ny == 10.0
+
+
+class TestLocalLineHeading:
+    """Unit tests for LineDetector.local_line_heading."""
+
+    def _horizontal_contour(self):
+        import numpy as np
+        pts = [[[x, 240]] for x in range(50, 451, 10)]
+        return np.array(pts, dtype=np.int32)
+
+    def _vertical_contour(self):
+        import numpy as np
+        pts = [[[320, y]] for y in range(50, 401, 10)]
+        return np.array(pts, dtype=np.int32)
+
+    def test_horizontal_line_resolved_to_180(self):
+        # Robot heading ~180° (pointing left) → should disambiguate to ~180°
+        contour = self._horizontal_contour()
+        heading = LineDetector.local_line_heading(contour, 250.0, 240.0, 180.0)
+        diff = abs(((heading - 180.0) + 180) % 360 - 180)
+        assert diff < 20, f"Expected ~180°, got {heading:.1f}°"
+
+    def test_horizontal_line_resolved_to_0(self):
+        # Same contour but robot heading ~0° → should disambiguate to ~0°
+        contour = self._horizontal_contour()
+        heading = LineDetector.local_line_heading(contour, 250.0, 240.0, 0.0)
+        diff = abs(((heading - 0.0) + 180) % 360 - 180)
+        assert diff < 20, f"Expected ~0°, got {heading:.1f}°"
+
+    def test_vertical_line_resolved_to_90(self):
+        # Vertical contour (pointing up) + robot heading ~90° → should give ~90°
+        contour = self._vertical_contour()
+        heading = LineDetector.local_line_heading(contour, 320.0, 200.0, 90.0)
+        diff = abs(((heading - 90.0) + 180) % 360 - 180)
+        assert diff < 20, f"Expected ~90°, got {heading:.1f}°"
+
+    def test_vertical_line_resolved_to_270(self):
+        # Vertical contour + robot heading ~270° → disambiguate to ~270°
+        contour = self._vertical_contour()
+        heading = LineDetector.local_line_heading(contour, 320.0, 200.0, 270.0)
+        diff = abs(((heading - 270.0) + 180) % 360 - 180)
+        assert diff < 20, f"Expected ~270°, got {heading:.1f}°"
+
+    def test_fallback_when_too_few_points(self):
+        import numpy as np
+        # Only 2 nearby points → fall back to robot_heading_deg
+        contour = np.array([[[100, 100]], [[102, 100]]], dtype=np.int32)
+        heading = LineDetector.local_line_heading(contour, 101.0, 100.0, 123.0, search_radius=5.0)
+        assert heading == 123.0
+
+
+class TestCornerHandling:
+    """
+    Integration tests for corner-aware steering.
+
+    A synthetic L-shaped track (horizontal then vertical) is created in a
+    640×480 image and fed through the full detection + control pipeline to
+    verify that the robot receives sensible commands near the corner.
+    """
+
+    def _detect_l_shape(self):
+        """Detect an L-shaped line: horizontal left + vertical up at the junction."""
+        import numpy as np
+        img = np.full((480, 640, 3), 255, dtype=np.uint8)
+        img[228:252, 180:440] = 0   # horizontal segment  y≈240
+        img[100:228, 228:252] = 0   # vertical segment    x≈240
+        from line_detector import LineDetector
+        detector = LineDetector()
+        result = detector.detect(img)
+        return result
+
+    def test_centroid_biased_toward_bend(self):
+        """
+        Confirm the known limitation: centroid IS biased toward the bend.
+        nearest_x should be closer to the horizontal segment than centroid_x is.
+        """
+        result = self._detect_l_shape()
+        if not result.found or result.contour is None:
+            pytest.skip("L-line not detected in this environment")
+
+        # Robot approaching from the right side of the horizontal segment
+        robot_x, robot_y = 400.0, 240.0
+        nx, ny = LineDetector.nearest_point_on_contour(result.contour, robot_x, robot_y)
+
+        # Nearest point should be close to y=240 (horizontal segment)
+        assert abs(ny - 240) < 30, (
+            f"Nearest y={ny:.0f} should be near horizontal segment y=240"
+        )
+        # And closer to the robot than the centroid is
+        dist_nearest = ((nx - robot_x) ** 2 + (ny - robot_y) ** 2) ** 0.5
+        dist_centroid = (
+            (result.centroid_x - robot_x) ** 2 + (result.centroid_y - robot_y) ** 2
+        ) ** 0.5
+        assert dist_nearest <= dist_centroid, (
+            f"nearest ({nx:.0f},{ny:.0f}) should be ≤ centroid "
+            f"({result.centroid_x},{result.centroid_y}) distance from robot"
+        )
+
+    def test_controller_does_not_stop_at_corner(self):
+        """Robot on the horizontal segment with ArUco → must NOT issue STOP."""
+        result = self._detect_l_shape()
+        if not result.found:
+            pytest.skip("L-line not detected in this environment")
+
+        ctrl = RobotController(centre_tolerance=30, heading_tolerance=15.0)
+        aruco = make_aruco(found=True, heading_deg=180.0, centre_x=380.0, centre_y=240.0)
+        cmd = ctrl.compute(result, aruco)
+        assert cmd.action != CMD_STOP
+
+    def test_heading_correction_adapts_after_corner(self):
+        """
+        Once the robot has turned 90° (heading≈90°) and is on the vertical
+        segment, the heading correction should NOT fight the turn.
+
+        With the old code (fixed ROBOT_DESIRED_HEADING=180°) the heading error
+        would be -90°, triggering CMD_RIGHT and reversing the completed turn.
+        With the new local-heading approach the error should be small → FORWARD.
+        """
+        import numpy as np
+        # Frame where only the vertical segment is visible (robot is past the corner)
+        img = np.full((480, 640, 3), 255, dtype=np.uint8)
+        img[100:350, 228:252] = 0   # only vertical segment
+
+        from line_detector import LineDetector
+        result = LineDetector().detect(img)
+        if not result.found:
+            pytest.skip("Vertical line not detected in this environment")
+
+        ctrl = RobotController(centre_tolerance=30, heading_tolerance=15.0)
+        # Robot is on the vertical segment, heading 90° (pointing up) – correct orientation
+        aruco = make_aruco(found=True, heading_deg=90.0, centre_x=240.0, centre_y=220.0)
+        cmd = ctrl.compute(result, aruco)
+        # With the new local-heading correction this should be FORWARD (not RIGHT)
+        assert cmd.action == CMD_FORWARD, (
+            f"Expected FORWARD after completed 90° corner turn, got {cmd.action}"
+        )
