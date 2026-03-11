@@ -70,6 +70,7 @@ class LineDetector:
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.frame_centre_x = frame_width // 2
+        self.roi_top_fraction = roi_top_fraction
         # Skip the top portion of the frame if specified (0.0 = full frame).
         # With an overhead camera there is nothing to skip, so the default is 0.0.
         self.roi_y_start = int(frame_height * roi_top_fraction)
@@ -95,8 +96,14 @@ class LineDetector:
         """
         result = LineDetectionResult()
 
+        frame_height, frame_width = frame.shape[:2]
+        frame_centre_x = frame_width // 2
+        roi_y_start = int(frame_height * self.roi_top_fraction)
+        # Clamp to a valid slice start to avoid empty ROI edge-cases.
+        roi_y_start = max(0, min(roi_y_start, frame_height - 1))
+
         # Crop to region-of-interest (bottom portion of frame)
-        roi = frame[self.roi_y_start:, :]
+        roi = frame[roi_y_start:, :]
 
         # Convert to HSV and threshold
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -114,8 +121,8 @@ class LineDetector:
         )
 
         # Build a full-frame mask for debug display
-        full_mask = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
-        full_mask[self.roi_y_start:, :] = mask_roi
+        full_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+        full_mask[roi_y_start:, :] = mask_roi
         result.mask = full_mask
 
         # Find contours in the ROI mask
@@ -136,16 +143,16 @@ class LineDetector:
             return result
 
         cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"]) + self.roi_y_start  # offset back to full frame
+        cy = int(M["m01"] / M["m00"]) + roi_y_start  # offset back to full frame
 
         # Adjust contour coordinates back to full-frame space
         adjusted_contour = largest.copy()
-        adjusted_contour[:, :, 1] += self.roi_y_start
+        adjusted_contour[:, :, 1] += roi_y_start
 
         result.found = True
         result.centroid_x = cx
         result.centroid_y = cy
-        result.error_x = cx - self.frame_centre_x
+        result.error_x = cx - frame_centre_x
         result.contour = adjusted_contour
 
         return result

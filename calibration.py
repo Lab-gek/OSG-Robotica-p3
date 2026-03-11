@@ -30,6 +30,8 @@ import time
 import cv2
 import numpy as np
 
+import config
+
 
 WINDOW_MAIN  = "Calibration – Original + Mask"
 WINDOW_BARS  = "HSV Trackbars"
@@ -48,7 +50,8 @@ def create_trackbars() -> None:
     cv2.createTrackbar("S_max", WINDOW_BARS, 255, 255, nothing)
     cv2.createTrackbar("V_min", WINDOW_BARS,   0, 255, nothing)
     cv2.createTrackbar("V_max", WINDOW_BARS,  80, 255, nothing)
-    cv2.createTrackbar("ROI_top%", WINDOW_BARS, 40, 80, nothing)
+    roi_default = int(max(0.0, min(0.8, config.ROI_TOP_FRACTION)) * 100)
+    cv2.createTrackbar("ROI_top%", WINDOW_BARS, roi_default, 80, nothing)
 
 
 def read_trackbars() -> tuple:
@@ -62,14 +65,88 @@ def read_trackbars() -> tuple:
     return (h_min, s_min, v_min), (h_max, s_max, v_max), roi
 
 
-def run(camera_index: int, width: int, height: int) -> None:
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        print(f"ERROR: Cannot open camera {camera_index}", file=sys.stderr)
+def _configure_capture(cap: cv2.VideoCapture, width: int, height: int) -> None:
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FPS, config.FRAME_FPS)
+
+
+def _probe_capture(cap: cv2.VideoCapture, probe_frames: int = 12) -> tuple[bool, float, tuple[int, int] | None]:
+    """Read a few frames and check whether we get a non-black stream."""
+    brightness_values: list[float] = []
+    shape: tuple[int, int] | None = None
+    for _ in range(probe_frames):
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        brightness_values.append(float(gray.mean()))
+        h, w = frame.shape[:2]
+        shape = (w, h)
+
+    if not brightness_values:
+        return False, 0.0, shape
+
+    avg_brightness = float(sum(brightness_values) / len(brightness_values))
+    # Mean near zero across many frames indicates an effectively black stream.
+    return avg_brightness > 5.0, avg_brightness, shape
+
+
+def open_camera(source, width: int, height: int) -> cv2.VideoCapture:
+    """Open camera source and print requested vs negotiated stream settings."""
+    try:
+        source = int(source)
+    except (TypeError, ValueError):
+        pass
+
+    backends: list[tuple[str, int | None]] = [("ANY", None)]
+    if isinstance(source, int):
+        backends = [("V4L2", cv2.CAP_V4L2), ("ANY", None)]
+
+    best_cap: cv2.VideoCapture | None = None
+    best_brightness = -1.0
+    best_name = "UNKNOWN"
+
+    for backend_name, backend_flag in backends:
+        cap = cv2.VideoCapture(source) if backend_flag is None else cv2.VideoCapture(source, backend_flag)
+        if not cap.isOpened():
+            continue
+
+        _configure_capture(cap, width, height)
+        ok, brightness, _ = _probe_capture(cap)
+        if ok:
+            best_cap = cap
+            best_brightness = brightness
+            best_name = backend_name
+            break
+
+        if brightness > best_brightness:
+            if best_cap is not None:
+                best_cap.release()
+            best_cap = cap
+            best_brightness = brightness
+            best_name = backend_name
+        else:
+            cap.release()
+
+    if best_cap is None:
+        print(f"ERROR: Cannot open camera: {source}", file=sys.stderr)
         sys.exit(1)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    _configure_capture(best_cap, width, height)
+    actual_w = int(best_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(best_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = best_cap.get(cv2.CAP_PROP_FPS)
+    print(
+        "Camera opened: requested "
+        f"{width}x{height}@{config.FRAME_FPS}  got {actual_w}x{actual_h}@{actual_fps:.1f}"
+    )
+    print(f"Capture backend selected: {best_name}  probe_brightness={best_brightness:.1f}")
+    return best_cap
+
+
+def run(camera_source, width: int, height: int) -> None:
+    cap = open_camera(camera_source, width, height)
 
     # Camera warm-up: some USB cameras return black frames until the sensor
     # stabilises (same fix as main.py).
@@ -77,7 +154,18 @@ def run(camera_index: int, width: int, height: int) -> None:
     for _ in range(20):
         cap.read()
 
+    ret_check, check_frame = cap.read()
+    if ret_check and check_frame is not None:
+        brightness = float(np.mean(cv2.cvtColor(check_frame, cv2.COLOR_BGR2GRAY)))
+        print(
+            "Post-warmup frame: "
+            f"shape={check_frame.shape}  mean_brightness={brightness:.1f}"
+        )
+    else:
+        print(f"WARNING: Post-warmup frame read failed (ret={ret_check})")
+
     create_trackbars()
+    cv2.namedWindow(WINDOW_MAIN, cv2.WINDOW_NORMAL)
     print("Calibration running.  Press 's' to print values, 'q'/ESC to quit.")
 
     while True:
@@ -86,8 +174,11 @@ def run(camera_index: int, width: int, height: int) -> None:
             print("ERROR: Failed to read frame", file=sys.stderr)
             break
 
+        frame_h, frame_w = frame.shape[:2]
+        gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+
         lower, upper, roi_pct = read_trackbars()
-        roi_y = int(height * roi_pct / 100)
+        roi_y = int(frame_h * roi_pct / 100)
 
         # Apply ROI (blank out top portion)
         display_frame = frame.copy()
@@ -106,7 +197,16 @@ def run(camera_index: int, width: int, height: int) -> None:
         combined   = np.hstack([display_frame, mask_bgr])
 
         # Draw ROI line
-        cv2.line(combined, (0, roi_y), (width, roi_y), (0, 255, 255), 1)
+        cv2.line(combined, (0, roi_y), (frame_w, roi_y), (0, 255, 255), 1)
+        cv2.putText(
+            combined,
+            f"brightness={gray_mean:.1f}",
+            (10, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 0),
+            2,
+        )
 
         cv2.imshow(WINDOW_MAIN, combined)
 
@@ -126,9 +226,13 @@ def run(camera_index: int, width: int, height: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="HSV calibration tool for line detection")
-    parser.add_argument("--camera", type=int, default=0, help="Camera index (default: 0)")
-    parser.add_argument("--width",  type=int, default=640, help="Frame width")
-    parser.add_argument("--height", type=int, default=480, help="Frame height")
+    parser.add_argument(
+        "--camera",
+        default=config.CAMERA_INDEX,
+        help=f"Camera index or URL (default: {config.CAMERA_INDEX})",
+    )
+    parser.add_argument("--width",  type=int, default=config.FRAME_WIDTH, help="Frame width")
+    parser.add_argument("--height", type=int, default=config.FRAME_HEIGHT, help="Frame height")
     args = parser.parse_args()
     run(args.camera, args.width, args.height)
 
