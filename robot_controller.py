@@ -137,9 +137,9 @@ class RobotController:
             dy = aruco.centre_y - line.centroid_y
 
             # Project displacement onto the robot's lateral (right) axis.
-            # In image coordinates: heading 0° = right, 90° = up (−Y), 180° = left.
-            #   forward vector : (cos θ,  −sin θ)
-            #   right   vector : (sin θ,   cos θ)   ← lateral axis
+            # In image coordinates: heading 0° = right, 90° = up (-Y), 180° = left.
+            #   forward vector : (cos θ,  -sin θ)
+            #   right   vector : (sin θ,   cos θ)   <- lateral axis
             heading_rad = math.radians(aruco.heading_deg)
             lateral_err = dx * math.sin(heading_rad) + dy * math.cos(heading_rad)
             # positive lateral_err → robot is to the RIGHT of the line
