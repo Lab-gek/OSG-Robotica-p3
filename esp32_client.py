@@ -111,8 +111,9 @@ class Esp32Client:
 
         # 1. Update speed if it changed
         if command.speed != self._last_speed:
+            self._last_speed = command.speed  # update locally before sending so the
+            # loop is never stalled by repeated retries when the ESP32 is unreachable
             if self._request(f"{config.ESP32_EP_SPEED}?value={command.speed}"):
-                self._last_speed = command.speed
                 sent_anything = True
 
         # 2. Update direction if it changed
@@ -120,9 +121,10 @@ class Esp32Client:
             endpoint = _ACTION_ENDPOINT.get(command.action)
             if endpoint is None:
                 logger.warning("Unknown action: %s", command.action)
-            elif self._request(endpoint):
-                self._last_action = command.action
-                sent_anything = True
+            else:
+                self._last_action = command.action  # update locally before sending
+                if self._request(endpoint):
+                    sent_anything = True
 
         return sent_anything
 
