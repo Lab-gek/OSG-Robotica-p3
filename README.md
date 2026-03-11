@@ -10,12 +10,79 @@ An overhead-camera Python system that:
 3. **Sends HTTP commands** (`FORWARD` / `LEFT` / `RIGHT` / `STOP`) to an ESP32 so it drives along the line.
 
 ```
-Camera
+Camera (overhead, fixed)
   │
   ├─► LineDetector  ──┐
-  │                   ├──► RobotController ──► Esp32Client ──► ESP32
+  │                   ├──► RobotController ──► Esp32Client ──► ESP32 ──► L298N ──► Motors
   └─► ArucoTracker ──┘
 ```
+
+---
+
+## Required setup
+
+### Hardware
+
+| Component | Details |
+|-----------|---------|
+| **Overhead camera** | Any USB webcam (index 0 by default). Must be mounted **fixed above the track** looking straight down. Minimum recommended resolution: 640 × 480. |
+| **ESP32 development board** | Any 30-pin or 38-pin ESP32 (e.g. ESP32 DevKit V1). Must be on the same WiFi network as the host PC. |
+| **L298N motor driver** | Dual H-bridge. Connects to the ESP32 GPIO pins listed in the wiring table below. |
+| **Two DC motors** | Standard TT or N20 gear motors. One connected to each L298N output channel. |
+| **Robot chassis** | Any two-wheel (differential drive) chassis that holds the ESP32 + L298N. |
+| **ArUco marker** | Printed marker ID **0** from dictionary **DICT_4X4_50**, mounted **flat on top** of the robot so the overhead camera can see it. Recommended size: 7 × 7 cm or larger. |
+| **Track** | A **black line** (e.g. black tape) on a **light / yellowish surface** (e.g. wooden floor or white paper). |
+| **WiFi router / hotspot** | The PC running `main.py` and the ESP32 must be on the same local network. |
+
+### ESP32 wiring (L298N)
+
+| Signal | ESP32 GPIO | L298N pin |
+|--------|-----------|-----------|
+| Motor 1 – direction A | 27 | IN1 |
+| Motor 1 – direction B | 26 | IN2 |
+| Motor 1 – PWM enable | 14 | ENA |
+| Motor 2 – direction A | 33 | IN3 |
+| Motor 2 – direction B | 25 | IN4 |
+| Motor 2 – PWM enable | 32 | ENB |
+| Ground | GND | GND |
+
+> Power the L298N 12 V input from your battery pack.  
+> The 5 V output of the L298N can power the ESP32 (connect to VIN).
+
+### Software requirements
+
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.9 or newer |
+| opencv-python | ≥ 4.8.0 |
+| numpy | ≥ 1.24.0 |
+| requests | ≥ 2.28.0 |
+| Arduino IDE (for ESP32 flash) | 2.x recommended |
+| ESP32 board package | ≥ 2.0 (install via Arduino Board Manager) |
+
+Install all Python dependencies at once:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Generating the ArUco marker
+
+Use the quick one-liner (requires opencv-python to be installed):
+
+```python
+python - <<'EOF'
+import cv2
+marker = cv2.aruco.generateImageMarker(
+    cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
+    id=0, sidePixels=400
+)
+cv2.imwrite("aruco_marker_id0.png", marker)
+print("Saved aruco_marker_id0.png")
+EOF
+```
+
+Print the saved PNG at roughly **7 × 7 cm** and attach it flat on top of the robot.
 
 ---
 
@@ -44,7 +111,17 @@ Camera
 pip install -r requirements.txt
 ```
 
-### 2. Calibrate for your lighting environment
+### 2. (Optional) Find your camera index
+
+If you have more than one webcam, run the helper script to list available cameras and their indices:
+
+```bash
+python list_cameras.py
+```
+
+Use the index shown for your overhead camera with `--camera <index>` in the commands below (default is `0`).
+
+### 3. Calibrate for your lighting environment
 
 Run the calibration tool **before** the first real-world deployment.  
 It opens a live camera feed with HSV trackbars so you can visually tune the black-line mask:
@@ -55,7 +132,7 @@ python calibration.py --camera 0
 
 When the mask looks clean (white = line, black = background), press **`s`** to print the HSV values and copy them into `config.py`.
 
-### 3. Run the controller
+### 4. Run the controller
 
 ```bash
 # With debug window (default)
@@ -77,14 +154,34 @@ Press **`q`** or **`ESC`** in the debug window, or **Ctrl-C** in the terminal, t
 
 ## ESP32 setup  (`ESP32_script.ino`)
 
-### WiFi – Station (STA) mode
+### 1. Edit WiFi credentials
 
-The firmware connects to your local WiFi network (SSID **wojo** by default).  
-After uploading the sketch, open the Serial monitor at 115200 baud — the assigned IP address is printed there. Then set it in `config.py`:
+Open `ESP32_script.ino` and replace the placeholders with your network details:
+
+```cpp
+const char* ssid     = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+```
+
+### 2. Flash the firmware
+
+1. Open `ESP32_script.ino` in the **Arduino IDE**.
+2. In **Tools → Board** select your ESP32 board (e.g. *ESP32 Dev Module*).
+3. Select the correct **COM / serial port**.
+4. Click **Upload**.
+5. After upload, open **Tools → Serial Monitor** at **115 200 baud**.
+6. The assigned IP address is printed on boot, e.g. `IP address: 192.168.1.42`.
+
+### 3. Update `config.py`
 
 ```python
-ESP32_BASE_URL = "http://<IP_FROM_SERIAL_MONITOR>"
+ESP32_BASE_URL = "http://192.168.1.42"   # ← use the IP from Serial Monitor
 ```
+
+### WiFi – Station (STA) mode
+
+The firmware connects to your local WiFi network.  
+Both the PC running `main.py` and the ESP32 **must be on the same network**.
 
 ### HTTP API
 
