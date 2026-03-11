@@ -25,6 +25,7 @@ Press  s  to print the current values to stdout (copy-paste them into config.py)
 
 import argparse
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -69,6 +70,12 @@ def run(camera_index: int, width: int, height: int) -> None:
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    # Camera warm-up: some USB cameras return black frames until the sensor
+    # stabilises (same fix as main.py).
+    time.sleep(1.0)
+    for _ in range(20):
+        cap.read()
 
     create_trackbars()
     print("Calibration running.  Press 's' to print values, 'q'/ESC to quit.")
