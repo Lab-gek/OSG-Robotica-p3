@@ -6,13 +6,15 @@ Layout (single window)
 -----------------------
 
   ┌────────────────────────┬────────────────────────┐
-  │  Camera + overlays     │  Binary line mask      │
-  │  (line contour,        │  (thresholded pixels   │
-  │   ArUco marker,        │   shown in green)      │
-  │   heading arrow)       │                        │
+  │  Camera + overlays     │  HSV map               │
+  │  (line contour,        │  (V channel + detected │
+  │   ArUco marker,        │   pixels in green,     │
+  │   heading arrow,       │   HSV range shown)     │
+  │   nearest line point,  │                        │
+  │   local line heading)  │                        │
   └────────────────────────┴────────────────────────┘
-  │  Status bar: CMD | Speed | FPS | Line error | ArUco heading      │
-  └─────────────────────────────────────────────────────────────────┘
+  │  Status bar: CMD | Speed | FPS | Line error | ArUco heading | Local heading │
+  └──────────────────────────────────────────────────────────────────────────────┘
 
 Pass the two detector results and the current command to
 ``DebugVisualizer.build_frame()`` to get a single BGR image ready for
@@ -20,10 +22,12 @@ Pass the two detector results and the current command to
 """
 
 import math
+from typing import Optional
 
 import cv2
 import numpy as np
 
+import config
 from line_detector import LineDetectionResult, LineDetector
 from aruco_tracker import ArucoDetectionResult, ArucoTracker
 from robot_controller import RobotCommand
@@ -92,15 +96,41 @@ class DebugVisualizer:
         annotated = LineDetector.draw_debug(frame, line_result)
         annotated = ArucoTracker.draw_debug(annotated, aruco_result)
 
-        # Right panel: binary line mask
-        mask_panel = self._build_mask_panel(line_result, h, w)
+        # Compute nearest contour point and local line heading when both
+        # the ArUco marker and line are visible.  These are drawn on the
+        # annotated view so the operator can see how the controller is
+        # interpreting corners.
+        local_heading: Optional[float] = None
+        if (
+            aruco_result.found
+            and line_result.found
+            and line_result.contour is not None
+            and aruco_result.centre_x is not None
+            and aruco_result.centre_y is not None
+            and aruco_result.heading_deg is not None
+        ):
+            nearest_x, nearest_y = LineDetector.nearest_point_on_contour(
+                line_result.contour, aruco_result.centre_x, aruco_result.centre_y
+            )
+            local_heading = LineDetector.local_line_heading(
+                line_result.contour, nearest_x, nearest_y, aruco_result.heading_deg
+            )
+            self._draw_nearest_point(
+                annotated,
+                nearest_x, nearest_y,
+                local_heading,
+                aruco_result.centre_x, aruco_result.centre_y,
+            )
+
+        # Right panel: HSV map (Value channel + detection overlay + range info)
+        mask_panel = self._build_hsv_map_panel(frame, line_result, h, w)
 
         # Combine side-by-side
         combined = np.hstack([annotated, mask_panel])
 
         # Status bar below
         status = self._build_status_bar(
-            combined.shape[1], command, fps, line_result, aruco_result
+            combined.shape[1], command, fps, line_result, aruco_result, local_heading
         )
         composite = np.vstack([combined, status])
 
@@ -117,23 +147,43 @@ class DebugVisualizer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_mask_panel(
+    def _build_hsv_map_panel(
+        frame: np.ndarray,
         line_result: LineDetectionResult,
         h: int,
         w: int,
     ) -> np.ndarray:
-        """Build the right-hand mask panel (h × w, BGR)."""
-        panel = np.zeros((h, w, 3), dtype=np.uint8)
+        """Build the right-hand HSV-map panel (h × w, BGR).
 
+        Shows the Value (brightness) channel of the current frame so the
+        operator can see which pixels are dark enough to be the black line.
+        The detected line pixels are highlighted in green and the active
+        HSV threshold range is printed at the top of the panel.
+        """
+        # Derive the Value channel – low V = dark = black line
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        v_channel = hsv[:, :, 2]
+        panel = cv2.cvtColor(v_channel, cv2.COLOR_GRAY2BGR)
+
+        # Overlay detected pixels in green
         if line_result.mask is not None:
-            # Detected pixels shown as bright green
             panel[line_result.mask > 0] = _GREEN
 
         # Panel title
         cv2.putText(
-            panel, "Line mask (HSV threshold)",
+            panel, "HSV Map (V channel + line mask)",
             (8, 20),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, _WHITE, 1,
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, _WHITE, 1,
+        )
+
+        # Active HSV threshold range
+        lo = config.LINE_HSV_LOWER
+        hi = config.LINE_HSV_UPPER
+        cv2.putText(
+            panel,
+            f"H:{lo[0]}-{hi[0]}  S:{lo[1]}-{hi[1]}  V:{lo[2]}-{hi[2]}",
+            (8, 38),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.40, _CYAN, 1,
         )
 
         # Centroid cross-hair (if line was found)
@@ -151,12 +201,47 @@ class DebugVisualizer:
         return panel
 
     @staticmethod
+    def _draw_nearest_point(
+        vis: np.ndarray,
+        nearest_x: float,
+        nearest_y: float,
+        local_heading: float,
+        robot_x: float,
+        robot_y: float,
+    ) -> None:
+        """Draw the nearest line point and local line heading on the annotated view.
+
+        Draws:
+        - A diamond marker at the nearest contour point.
+        - A dashed line from the robot centre to that point (shows lateral
+          displacement clearly).
+        - An arrow at the nearest point in the direction of the local line
+          heading (shows the controller's corner-aware target direction).
+        """
+        nx, ny = int(nearest_x), int(nearest_y)
+        rx, ry = int(robot_x), int(robot_y)
+
+        # Line from robot centre to nearest contour point
+        cv2.line(vis, (rx, ry), (nx, ny), _ORANGE, 1, cv2.LINE_AA)
+
+        # Diamond marker at the nearest point
+        cv2.drawMarker(vis, (nx, ny), _ORANGE, cv2.MARKER_DIAMOND, 12, 2)
+
+        # Local line heading arrow at the nearest point
+        arrow_len = 40
+        heading_rad = math.radians(local_heading)
+        ax = int(nx + arrow_len * math.cos(heading_rad))
+        ay = int(ny - arrow_len * math.sin(heading_rad))
+        cv2.arrowedLine(vis, (nx, ny), (ax, ay), _ORANGE, 2, tipLength=0.3)
+
+    @staticmethod
     def _build_status_bar(
         full_width: int,
         command: RobotCommand,
         fps: float,
         line_result: LineDetectionResult,
         aruco_result: ArucoDetectionResult,
+        local_heading: Optional[float] = None,
     ) -> np.ndarray:
         """Build a status bar strip (40 px tall × full_width, BGR)."""
         bar_h = 40
@@ -181,12 +266,16 @@ class DebugVisualizer:
         line_col  = _GREEN  if line_result.found  else _RED
 
         parts = [
-            (f"CMD: {action}",          cmd_col),
-            (f"Spd: {command.speed}",   _WHITE),
-            (f"FPS: {fps:.1f}",         _WHITE),
+            (f"CMD: {action}",            cmd_col),
+            (f"Spd: {command.speed}",     _WHITE),
+            (f"FPS: {fps:.1f}",           _WHITE),
             (f"Line err: {line_err_str}", line_col),
-            (aruco_str,                 aruco_col),
+            (aruco_str,                   aruco_col),
         ]
+
+        # Local line heading (corner-aware target direction)
+        if local_heading is not None:
+            parts.append((f"Loc.hdg:{local_heading:.1f}", _ORANGE))
 
         x = 10
         y = bar_h - 10
