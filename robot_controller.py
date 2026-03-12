@@ -38,10 +38,11 @@ When the ArUco marker (robot position) is visible:
      corner it adapts to the turn so the robot aligns with the new direction
      instead of fighting it.
 
-When the ArUco marker is NOT visible (fallback):
+When the ArUco marker is NOT visible:
 
-  The controller falls back to using the line's horizontal position relative
-  to the frame centre (line.error_x) as the steering signal.
+  The controller stops the robot.  With a fixed overhead camera the line
+  centroid position relative to the frame centre carries no information about
+  where the robot is, so there is no valid steering signal without ArUco.
 
 Command vocabulary
 ------------------
@@ -133,8 +134,8 @@ class RobotController:
         2. If both ArUco and line are detected → overhead-camera steering using
            the lateral error between the robot position and the *nearest point
            on the line contour* (handles corners correctly).
-        3. If only line detected (no ArUco) → fallback: steer toward the line
-           using the line's horizontal offset from the frame centre.
+        3. If only line detected (no ArUco) → STOP.  Without the robot's pixel
+           position the frame gives no usable steering signal.
         """
 
         # -- Safety: nothing detected ----------------------------------------
@@ -208,20 +209,11 @@ class RobotController:
                         action = CMD_RIGHT
                     speed = config.SPEED_TURN
 
-        # -- Fallback: no ArUco → use line position relative to frame centre --
+        # -- No ArUco: robot position unknown → stop safely ------------------
+        # With a fixed overhead camera the line centroid relative to frame
+        # centre carries no information about the robot's actual position.
         else:
-            error = line.error_x   # negative = line left of centre, positive = right
-
-            if abs(error) <= self.centre_tolerance:
-                action = CMD_FORWARD
-                speed  = config.SPEED_FORWARD
-            elif error < 0:
-                # Line is to the LEFT → robot must steer LEFT
-                action = CMD_LEFT
-                speed  = config.SPEED_TURN
-            else:
-                # Line is to the RIGHT → robot must steer RIGHT
-                action = CMD_RIGHT
-                speed  = config.SPEED_TURN
+            action = CMD_STOP
+            speed  = config.SPEED_STOP
 
         return RobotCommand(action, speed)

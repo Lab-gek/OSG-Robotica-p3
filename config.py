@@ -49,7 +49,7 @@ ROI_TOP_FRACTION = 0.0
 # ---------------------------------------------------------------------------
 # ArUco marker
 # ---------------------------------------------------------------------------
-ARUCO_DICT_ID  = "DICT_4X4_50"   # OpenCV ArUco dictionary name
+ARUCO_DICT_ID  = "DICT_7X7_50"   # OpenCV ArUco dictionary name
 ROBOT_MARKER_ID = 0               # The specific marker ID mounted on the robot
 
 # ---------------------------------------------------------------------------

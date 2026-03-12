@@ -51,39 +51,21 @@ class TestRobotControllerLineOnly:
     def setup_method(self):
         self.ctrl = RobotController(centre_tolerance=30)
 
-    def test_forward_when_centred(self):
+    def test_stop_when_no_aruco(self):
+        # Line found but no ArUco → robot position unknown → STOP.
+        # With a fixed overhead camera, line centroid relative to frame centre
+        # carries no information about where the robot is.
         cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=False))
-        assert cmd.action == CMD_FORWARD
-        assert cmd.speed == config.SPEED_FORWARD
+        assert cmd.action == CMD_STOP
+        assert cmd.speed == config.SPEED_STOP
 
-    def test_forward_within_tolerance_positive(self):
-        cmd = self.ctrl.compute(make_line(error_x=29), make_aruco(found=False))
-        assert cmd.action == CMD_FORWARD
-
-    def test_forward_within_tolerance_negative(self):
-        cmd = self.ctrl.compute(make_line(error_x=-29), make_aruco(found=False))
-        assert cmd.action == CMD_FORWARD
-
-    def test_right_when_line_right_of_centre(self):
-        # Line is to the RIGHT → robot steers RIGHT
-        cmd = self.ctrl.compute(make_line(error_x=80), make_aruco(found=False))
-        assert cmd.action == CMD_RIGHT
-        assert cmd.speed == config.SPEED_TURN
-
-    def test_left_when_line_left_of_centre(self):
-        # Line is to the LEFT → robot steers LEFT
-        cmd = self.ctrl.compute(make_line(error_x=-80), make_aruco(found=False))
-        assert cmd.action == CMD_LEFT
-        assert cmd.speed == config.SPEED_TURN
-
-    def test_forward_at_exact_tolerance_boundary(self):
-        # error_x == centre_tolerance is still within the dead-band (<=)
-        cmd = self.ctrl.compute(make_line(error_x=30), make_aruco(found=False))
-        assert cmd.action == CMD_FORWARD
-
-    def test_just_outside_tolerance(self):
-        cmd = self.ctrl.compute(make_line(error_x=31), make_aruco(found=False))
-        assert cmd.action == CMD_RIGHT
+    def test_stop_when_no_aruco_regardless_of_error_x(self):
+        # Result must be STOP for any line position when ArUco is absent.
+        for error_x in (-80, -31, -30, 0, 30, 31, 80):
+            cmd = self.ctrl.compute(make_line(error_x=error_x), make_aruco(found=False))
+            assert cmd.action == CMD_STOP, (
+                f"Expected STOP for error_x={error_x}, got {cmd.action}"
+            )
 
 
 class TestRobotControllerHeadingCorrection:
@@ -168,14 +150,14 @@ class TestRobotControllerOverheadCamera:
         assert cmd.action == CMD_RIGHT
         assert cmd.speed == config.SPEED_TURN
 
-    def test_fallback_to_line_error_when_no_aruco(self):
-        # No ArUco → fall back to line.error_x steering
+    def test_stop_when_no_aruco(self):
+        # No ArUco → robot position unknown → STOP regardless of line position.
         cmd = self.ctrl.compute(make_line(error_x=80), make_aruco(found=False))
-        assert cmd.action == CMD_RIGHT
+        assert cmd.action == CMD_STOP
 
-    def test_fallback_forward_when_no_aruco_and_centred(self):
+    def test_stop_when_no_aruco_and_line_centred(self):
         cmd = self.ctrl.compute(make_line(error_x=0), make_aruco(found=False))
-        assert cmd.action == CMD_FORWARD
+        assert cmd.action == CMD_STOP
 
     def test_lateral_error_heading_0_right_of_line(self):
         # Robot heading = 0° (pointing right), robot directly below the line.
