@@ -9,6 +9,8 @@ helps you find the correct HSV ranges for your specific lighting environment.
 # ---------------------------------------------------------------------------
 # Camera
 # ---------------------------------------------------------------------------
+# Camera is mounted OVERHEAD (fixed position above the track), NOT on the robot.
+# The robot is tracked in the camera view via an ArUco marker placed on top of it.
 CAMERA_INDEX = 0          # OpenCV VideoCapture index (0 = default webcam / USB cam)
 FRAME_WIDTH  = 640        # Captured frame width  (pixels)
 FRAME_HEIGHT = 480        # Captured frame height (pixels)
@@ -39,6 +41,11 @@ MORPH_ITERATIONS  = 2
 # Minimum contour area to be considered a real line segment (filters noise)
 LINE_MIN_CONTOUR_AREA = 500   # pixels²
 
+# Fraction of the frame height to skip from the top when detecting the line.
+# With an on-robot camera this was ~0.4 to avoid the robot body in the frame.
+# With an overhead (top-down) camera the full frame is valid → set to 0.0.
+ROI_TOP_FRACTION = 0.0
+
 # ---------------------------------------------------------------------------
 # ArUco marker
 # ---------------------------------------------------------------------------
@@ -53,9 +60,25 @@ ROBOT_MARKER_ID = 0               # The specific marker ID mounted on the robot
 # The robot tries to keep the line centred in the middle zone.
 CONTROL_ZONES = 5
 
-# Dead-band: if the line centre is within ±CENTRE_TOLERANCE pixels of the
-# frame centre, the robot is considered "on track" → send FORWARD.
+# Dead-band: if the lateral error between the robot (ArUco) and the line is
+# within ±CENTRE_TOLERANCE pixels, the robot is considered "on track" → FORWARD.
 CENTRE_TOLERANCE = 30   # pixels
+
+# Desired heading for the robot in degrees (0 = right, 90 = up, 180 = left).
+# The robot follows the line from the RIGHT side of the screen to the LEFT,
+# so its desired heading is 180° (pointing left in the overhead camera view).
+# This value is used only when no line contour is available (i.e. as a fallback).
+# During normal operation the controller derives the target heading dynamically
+# from the local line direction so that corners are navigated correctly.
+ROBOT_DESIRED_HEADING = 180.0
+
+# Radius (pixels) used to sample nearby contour points when estimating the
+# local line direction at the nearest point.  With a 640×480 overhead camera
+# and a ~3–4 cm wide line, 60–100 px works well.
+#   Increase  → smoother direction estimation, but may blend two segments at a
+#               sharp corner, causing the robot to start turning slightly early.
+#   Decrease  → tighter to the corner, but noisier on straight segments.
+LINE_LOOKAHEAD_RADIUS = 80  # pixels
 
 # Speed levels sent to ESP32.
 # The firmware maps slider value 0→25→50→75→100 to PWM duty 0→200→220→237→255.
