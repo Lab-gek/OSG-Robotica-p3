@@ -31,6 +31,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_DIR))
+import config
 
 import aruco
 import comms
@@ -43,21 +44,22 @@ from pid import PID
 
 # ---------------------------------------------------------------------------
 # Default constants (overridden by trackbars at runtime)
+# Read defaults from project/config.py when available.
 # ---------------------------------------------------------------------------
-ESP32_IP: str = "http://192.168.1.42"
-BASE_SPEED: int = 180
-TURN_SPEED: int = 120
-THRESHOLD: int = 60
-JUNCTION_WIDTH_RATIO: float = 2.8
-NO_LINE_LIMIT: int = 5
-HEADING_TOLERANCE: float = 10.0
-KP: float = 0.4
-KI: float = 0.001
-KD: float = 0.1
+ESP32_IP: str = getattr(config, "ESP32_IP", getattr(config, "ESP32_BASE_URL", "http://192.168.1.42"))
+BASE_SPEED: int = getattr(config, "BASE_SPEED", 180)
+TURN_SPEED: int = getattr(config, "TURN_SPEED", 120)
+THRESHOLD: int = getattr(config, "THRESHOLD", 60)
+JUNCTION_WIDTH_RATIO: float = getattr(config, "JUNCTION_WIDTH_RATIO", 2.8)
+NO_LINE_LIMIT: int = getattr(config, "NO_LINE_LIMIT", 5)
+HEADING_TOLERANCE: float = getattr(config, "HEADING_TOLERANCE", 10.0)
+KP: float = getattr(config, "KP", 0.4)
+KI: float = getattr(config, "KI", 0.001)
+KD: float = getattr(config, "KD", 0.1)
 
-LOG_PATH = PROJECT_DIR / "run_log.csv"
-WINDOW_MAIN = "Overhead Follower"
-WINDOW_MASK = "Mask / ROI"
+LOG_PATH = PROJECT_DIR / getattr(config, "LOG_FILENAME", "run_log.csv")
+WINDOW_MAIN = getattr(config, "WINDOW_MAIN", "Overhead Follower")
+WINDOW_MASK = getattr(config, "WINDOW_MASK", "Mask / ROI")
 
 # ---------------------------------------------------------------------------
 # Trackbar helpers
@@ -113,6 +115,8 @@ def _draw_status(
     right: int,
     fps: float,
     running: bool,
+    controller: Optional[PID] = None,
+    timings: Optional[dict] = None,
 ) -> None:
     lines = [
         f"State: {state}  Junctions: {junctions_done}",
@@ -121,11 +125,34 @@ def _draw_status(
         f"FPS: {fps:.1f}",
         "PAUSED" if not running else "",
     ]
+
+    # Draw current control values (fallback for missing Controls window text)
+    try:
+        base = sm_module.BASE_SPEED
+        turn = sm_module.TURN_SPEED
+        th = vision_module.THRESHOLD
+        jr = vision_module.JUNCTION_WIDTH_RATIO
+        kp = controller.kp if controller is not None else KP
+        ki = controller.ki if controller is not None else KI
+        kd = controller.kd if controller is not None else KD
+        controls_line = (
+            f"B:{base} T:{turn} Th:{th} JR:{jr:.1f} Kp:{kp:.3f} Ki:{ki:.3f} Kd:{kd:.3f}"
+        )
+        lines.append(controls_line)
+    except Exception:
+        # be conservative — don't crash drawing
+        pass
+
+    # Show simple timing summary when available
+    if timings:
+        perf_line = "  ".join(f"{k}:{v:.1f}ms" for k, v in timings.items())
+        lines.append(perf_line)
+
     y = 24
     for line in lines:
         if line:
-            cv2.putText(frame, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1)
-            y += 22
+            cv2.putText(frame, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            y += 20
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +176,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Overhead camera line follower")
     parser.add_argument("--camera", type=int, default=0, help="Camera index (default 0)")
     parser.add_argument("--esp32", type=str, default=ESP32_IP, help="ESP32 base URL")
+    parser.add_argument("-dry-run", "--dry-run", action="store_true", dest="dry_run",
+                        help="Do not send network commands (dry-run)")
     args = parser.parse_args()
 
     comms.ESP32_IP = args.esp32
+    # Propagate dry-run setting into comms so HTTP calls are skipped.
+    comms.DRY_RUN = bool(getattr(args, "dry_run", False))
 
     # --- init subsystems ---
     vp = VisionProcessor(camera_index=args.camera)
@@ -189,7 +220,9 @@ def main() -> None:
             _read_controls(controller)
 
             # --- grab frame ---
+            t_stage = time.perf_counter()
             frame = vp.read_frame()
+            t_capture = (time.perf_counter() - t_stage) * 1000.0
             if frame is None:
                 print("[main] Camera read failed – retrying…")
                 time.sleep(0.05)
@@ -201,24 +234,34 @@ def main() -> None:
             rx = ry = heading = None
             mask = roi = None
 
+            timings: dict = {}
+            timings["capture"] = t_capture
+
             if running:
                 # --- ArUco ---
+                t_stage = time.perf_counter()
                 rx, ry, heading = aruco.detect(frame)
+                timings["aruco"] = (time.perf_counter() - t_stage) * 1000.0
                 if rx is not None:
                     aruco.draw_marker(display, rx, ry, heading)
 
                 # --- Vision ---
+                t_stage = time.perf_counter()
                 mask, roi = vp.process(frame)
                 vp.draw_overlays(display)
+                timings["vision"] = (time.perf_counter() - t_stage) * 1000.0
 
                 # --- PID ---
+                t_stage = time.perf_counter()
                 if vp.line_cx is not None:
                     error = vp.line_cx - frame_w // 2
                     correction = controller.update(float(error))
                 else:
                     correction = 0.0
+                timings["pid"] = (time.perf_counter() - t_stage) * 1000.0
 
                 # --- State machine ---
+                t_stage = time.perf_counter()
                 left, right = machine.update(
                     line_cx=vp.line_cx,
                     frame_width=frame_w,
@@ -226,9 +269,12 @@ def main() -> None:
                     heading=heading,
                     pid_correction=correction,
                 )
+                timings["state"] = (time.perf_counter() - t_stage) * 1000.0
 
                 # --- Comms ---
+                t_stage = time.perf_counter()
                 comms.send_motors(left, right)
+                timings["comms"] = (time.perf_counter() - t_stage) * 1000.0
 
                 # --- Log ---
                 log_writer.writerow(
@@ -263,6 +309,8 @@ def main() -> None:
                 right=right,
                 fps=fps_acc,
                 running=running,
+                controller=controller,
+                timings=timings,
             )
 
             # Keyboard hints at bottom.

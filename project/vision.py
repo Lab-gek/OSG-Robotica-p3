@@ -6,12 +6,14 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import config
 
 # ---------------------------------------------------------------------------
 # Runtime-adjustable parameters (modified by GUI via module attributes).
+# Defaults are sourced from `project/config.py`.
 # ---------------------------------------------------------------------------
-THRESHOLD: int = 60           # grayscale threshold for black line (inverted)
-JUNCTION_WIDTH_RATIO: float = 2.8  # blob_width > normal_width * ratio → junction
+THRESHOLD: int = getattr(config, "THRESHOLD", 60)           # grayscale threshold for black line (inverted)
+JUNCTION_WIDTH_RATIO: float = getattr(config, "JUNCTION_WIDTH_RATIO", 2.8)  # blob_width > normal_width * ratio → junction
 
 
 class VisionProcessor:
@@ -42,6 +44,18 @@ class VisionProcessor:
     def open(self) -> bool:
         """Open the camera.  Returns True on success."""
         self.cap = cv2.VideoCapture(self.camera_index)
+        if not self.cap.isOpened():
+            return False
+
+        # Try to set capture properties from config for consistent performance.
+        try:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            self.cap.set(cv2.CAP_PROP_FPS, config.FRAME_FPS)
+        except Exception:
+            # Ignore if backend doesn't support these properties.
+            pass
+
         return self.cap.isOpened()
 
     def release(self) -> None:

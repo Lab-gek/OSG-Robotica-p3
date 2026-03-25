@@ -16,18 +16,21 @@ from __future__ import annotations
 from enum import Enum, auto
 from typing import Optional
 
+import config
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 # ---------------------------------------------------------------------------
 # Runtime-adjustable parameters (modified by GUI via module attributes).
+# Defaults are sourced from `project/config.py`.
 # ---------------------------------------------------------------------------
-JUNCTION_TARGETS: list[int] = [90, 180]
-HEADING_TOLERANCE: float = 10.0   # degrees
-TURN_SPEED: int = 120             # PWM for in-place rotation
-BASE_SPEED: int = 180             # forward PWM
-NO_LINE_LIMIT: int = 5            # consecutive no-line frames before REALIGN
+JUNCTION_TARGETS: list[int] = getattr(config, "JUNCTION_TARGETS", [90, 180])
+HEADING_TOLERANCE: float = getattr(config, "HEADING_TOLERANCE", 10.0)   # degrees
+TURN_SPEED: int = getattr(config, "TURN_SPEED", 120)             # PWM for in-place rotation
+BASE_SPEED: int = getattr(config, "BASE_SPEED", 180)             # forward PWM
+NO_LINE_LIMIT: int = getattr(config, "NO_LINE_LIMIT", 5)            # consecutive no-line frames before REALIGN
 
 
 class State(Enum):

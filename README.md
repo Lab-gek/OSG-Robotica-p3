@@ -87,24 +87,6 @@ The PC sends GET requests to the ESP32:
 
 ---
 
-## Legacy overview
-
-An overhead-camera Python system that:
-
-1. **Detects a black line** on a yellowish / wooden-plank surface with OpenCV (HSV masking).
-2. **Tracks the robot** via a single ArUco marker mounted on top of it.
-3. **Sends HTTP commands** (`FORWARD` / `LEFT` / `RIGHT` / `STOP`) to an ESP32 so it drives along the line.
-
-```
-Camera (overhead, fixed)
-  │
-  ├─► LineDetector  ──┐
-  │                   ├──► RobotController ──► Esp32Client ──► ESP32 ──► L298N ──► Motors
-  └─► ArucoTracker ──┘
-```
-
----
-
 ## Required setup
 
 ### Hardware
@@ -172,32 +154,9 @@ Print the saved PNG at roughly **7 × 7 cm** and attach it flat on top of the ro
 
 ---
 
-## File layout
+## Camera setup
 
-| File | Purpose |
-|------|---------|
-| `main.py` | Main control loop |
-| `config.py` | All tunable parameters (HSV ranges, speeds, ESP32 URL, …) |
-| `line_detector.py` | Black-line detection (HSV threshold + morphology) |
-| `aruco_tracker.py` | ArUco marker detection & heading |
-| `robot_controller.py` | Decision logic → command |
-| `esp32_client.py` | HTTP client (sends commands to ESP32) |
-| `calibration.py` | Interactive HSV calibration tool |
-| `ESP32_script.ino` | ESP32 firmware (WiFi + WebServer + L298N motor driver) |
-| `requirements.txt` | Python dependencies |
-| `tests/` | Unit tests (pytest) |
-
----
-
-## Quick start
-
-### 1. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. (Optional) Find your camera index
+### Find your camera index
 
 If you have more than one webcam, run the helper script to list available cameras and their indices:
 
@@ -207,7 +166,7 @@ python list_cameras.py
 
 Use the index shown for your overhead camera with `--camera <index>` in the commands below (default is `0`).
 
-### 3. Calibrate for your lighting environment
+### Calibrate for your lighting environment
 
 Run the calibration tool **before** the first real-world deployment.  
 It opens a live camera feed with HSV trackbars so you can visually tune the black-line mask:
@@ -218,7 +177,7 @@ python calibration.py --camera 0
 
 When the mask looks clean (white = line, black = background), press **`s`** to print the HSV values and copy them into `config.py`.
 
-### 4. Run the controller
+### Run the controller
 
 ```bash
 # With debug window (default)

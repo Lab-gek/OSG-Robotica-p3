@@ -16,13 +16,19 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import config
 
 # ---------------------------------------------------------------------------
 # Attempt to load the ArUco module from opencv-contrib-python.
 # ---------------------------------------------------------------------------
 try:
     _aruco = cv2.aruco  # type: ignore[attr-defined]
-    _DICT = _aruco.getPredefinedDictionary(_aruco.DICT_4X4_50)
+    # Allow dictionary selection from `project/config.py` (e.g. "DICT_4X4_50").
+    try:
+        dict_attr = getattr(_aruco, config.ARUCO_DICT_ID)
+        _DICT = _aruco.getPredefinedDictionary(dict_attr)
+    except Exception:
+        _DICT = _aruco.getPredefinedDictionary(_aruco.DICT_4X4_50)
     _PARAMS = _aruco.DetectorParameters()
     try:
         _DETECTOR = _aruco.ArucoDetector(_DICT, _PARAMS)
