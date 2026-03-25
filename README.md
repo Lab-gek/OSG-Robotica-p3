@@ -1,7 +1,93 @@
 # OSG-Robotica-p3
-Make robot move follow line based on openvc
 
-## Project overview
+Overhead-camera Python pipeline for an ESP32 line-follower robot with OpenCV GUI.
+
+## Quick start
+
+### 1. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> **Note:** `opencv-contrib-python` is required for ArUco marker support.
+
+### 2. Run the follower
+
+```bash
+python project/main.py
+```
+
+Optional arguments:
+
+```bash
+python project/main.py --camera 1          # use camera index 1
+python project/main.py --esp32 http://192.168.1.10   # custom ESP32 IP
+```
+
+### 3. Controls
+
+| Key      | Action |
+|----------|--------|
+| `q`/Esc  | Quit (stops motors, flushes log) |
+| Space    | Start / Pause |
+| `s`      | Emergency stop |
+| `r`      | Reset state machine |
+| `c`      | Recalibrate line width |
+| `m`      | Toggle mask window |
+
+Use the **Controls** trackbar window to adjust PID gains, speeds, threshold, and junction parameters live.
+
+### 4. Output
+
+A CSV log is written to `project/run_log.csv` on exit with columns:
+`t, rx, ry, heading, state, junctions_done, left, right`
+
+---
+
+## Project layout
+
+```
+project/
+├── AGENT.md           # full specification
+├── main.py            # entry point + OpenCV GUI
+├── vision.py          # camera, ROI preprocessing, centroid
+├── aruco.py           # ArUco detection, heading
+├── pid.py             # PID controller
+├── state_machine.py   # junction state machine
+└── comms.py           # HTTP sender to ESP32
+```
+
+See `project/AGENT.md` for the full technical specification.
+
+---
+
+## ESP32 HTTP API
+
+The PC sends GET requests to the ESP32:
+
+| Endpoint | Action |
+|----------|--------|
+| `/forward` | Both motors forward |
+| `/left` | Turn left |
+| `/right` | Turn right |
+| `/reverse` | Both motors backward |
+| `/stop` | Stop |
+| `/speed?value=<0-100>` | Set speed percentage |
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `opencv-contrib-python` | Computer vision + ArUco |
+| `numpy` | Array math |
+| `requests` | HTTP to ESP32 |
+
+---
+
+## Legacy overview
 
 An overhead-camera Python system that:
 
