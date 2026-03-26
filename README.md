@@ -1,21 +1,89 @@
 # OSG-Robotica-p3
-Make robot move follow line based on openvc
 
-## Project overview
+Overhead-camera Python pipeline for an ESP32 line-follower robot with OpenCV GUI.
 
-An overhead-camera Python system that:
+## Quick start
 
-1. **Detects a black line** on a yellowish / wooden-plank surface with OpenCV (HSV masking).
-2. **Tracks the robot** via a single ArUco marker mounted on top of it.
-3. **Sends HTTP commands** (`FORWARD` / `LEFT` / `RIGHT` / `STOP`) to an ESP32 so it drives along the line.
+### 1. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> **Note:** `opencv-contrib-python` is required for ArUco marker support.
+
+### 2. Run the follower
+
+```bash
+python project/main.py
+```
+
+Optional arguments:
+
+```bash
+python project/main.py --camera 1          # use camera index 1
+python project/main.py --esp32 http://192.168.1.10   # custom ESP32 IP
+```
+
+### 3. Controls
+
+| Key      | Action |
+|----------|--------|
+| `q`/Esc  | Quit (stops motors, flushes log) |
+| Space    | Start / Pause |
+| `s`      | Emergency stop |
+| `r`      | Reset state machine |
+| `c`      | Recalibrate line width |
+| `m`      | Toggle mask window |
+
+Use the **Controls** trackbar window to adjust PID gains, speeds, threshold, and junction parameters live.
+
+### 4. Output
+
+A CSV log is written to `project/run_log.csv` on exit with columns:
+`t, rx, ry, heading, state, junctions_done, left, right`
+
+---
+
+## Project layout
 
 ```
-Camera (overhead, fixed)
-  │
-  ├─► LineDetector  ──┐
-  │                   ├──► RobotController ──► Esp32Client ──► ESP32 ──► L298N ──► Motors
-  └─► ArucoTracker ──┘
+project/
+├── AGENT.md           # full specification
+├── main.py            # entry point + OpenCV GUI
+├── vision.py          # camera, ROI preprocessing, centroid
+├── aruco.py           # ArUco detection, heading
+├── pid.py             # PID controller
+├── state_machine.py   # junction state machine
+└── comms.py           # HTTP sender to ESP32
 ```
+
+See `project/AGENT.md` for the full technical specification.
+
+---
+
+## ESP32 HTTP API
+
+The PC sends GET requests to the ESP32:
+
+| Endpoint | Action |
+|----------|--------|
+| `/forward` | Both motors forward |
+| `/left` | Turn left |
+| `/right` | Turn right |
+| `/reverse` | Both motors backward |
+| `/stop` | Stop |
+| `/speed?value=<0-100>` | Set speed percentage |
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `opencv-contrib-python` | Computer vision + ArUco |
+| `numpy` | Array math |
+| `requests` | HTTP to ESP32 |
 
 ---
 
@@ -86,32 +154,9 @@ Print the saved PNG at roughly **7 × 7 cm** and attach it flat on top of the ro
 
 ---
 
-## File layout
+## Camera setup
 
-| File | Purpose |
-|------|---------|
-| `main.py` | Main control loop |
-| `config.py` | All tunable parameters (HSV ranges, speeds, ESP32 URL, …) |
-| `line_detector.py` | Black-line detection (HSV threshold + morphology) |
-| `aruco_tracker.py` | ArUco marker detection & heading |
-| `robot_controller.py` | Decision logic → command |
-| `esp32_client.py` | HTTP client (sends commands to ESP32) |
-| `calibration.py` | Interactive HSV calibration tool |
-| `ESP32_script.ino` | ESP32 firmware (WiFi + WebServer + L298N motor driver) |
-| `requirements.txt` | Python dependencies |
-| `tests/` | Unit tests (pytest) |
-
----
-
-## Quick start
-
-### 1. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. (Optional) Find your camera index
+### Find your camera index
 
 If you have more than one webcam, run the helper script to list available cameras and their indices:
 
@@ -121,7 +166,7 @@ python list_cameras.py
 
 Use the index shown for your overhead camera with `--camera <index>` in the commands below (default is `0`).
 
-### 3. Calibrate for your lighting environment
+### Calibrate for your lighting environment
 
 Run the calibration tool **before** the first real-world deployment.  
 It opens a live camera feed with HSV trackbars so you can visually tune the black-line mask:
@@ -132,7 +177,7 @@ python calibration.py --camera 0
 
 When the mask looks clean (white = line, black = background), press **`s`** to print the HSV values and copy them into `config.py`.
 
-### 4. Run the controller
+### Run the controller
 
 ```bash
 # With debug window (default)
