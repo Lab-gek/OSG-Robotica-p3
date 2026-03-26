@@ -7,7 +7,7 @@ Minimal central settings used by project modules.
 # ---------------------------------------------------------------------------
 # Camera defaults
 # ---------------------------------------------------------------------------
-CAMERA_INDEX = 0          # OpenCV VideoCapture index (0 = default webcam / USB cam)
+CAMERA_INDEX =2          # OpenCV VideoCapture index (0 = default webcam / USB cam)
 
 # ---------------------------------------------------------------------------
 # Control / runtime defaults

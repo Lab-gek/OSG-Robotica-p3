@@ -174,7 +174,12 @@ def _open_log() -> tuple[object, csv.DictWriter]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Overhead camera line follower")
-    parser.add_argument("--camera", type=int, default=0, help="Camera index (default 0)")
+    parser.add_argument(
+        "--camera",
+        type=int,
+        default=getattr(config, "CAMERA_INDEX", 0),
+        help=f"Camera index (default {getattr(config, 'CAMERA_INDEX', 0)})",
+    )
     parser.add_argument("--esp32", type=str, default=ESP32_IP, help="ESP32 base URL")
     parser.add_argument("-dry-run", "--dry-run", action="store_true", dest="dry_run",
                         help="Do not send network commands (dry-run)")
