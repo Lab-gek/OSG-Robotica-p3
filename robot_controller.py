@@ -204,9 +204,9 @@ class RobotController:
 
                 if abs(heading_error) > self.heading_tolerance:
                     if heading_error > 0:
-                        action = CMD_LEFT
-                    else:
                         action = CMD_RIGHT
+                    else:
+                        action = CMD_LEFT
                     speed = config.SPEED_TURN
 
         # -- No ArUco: robot position unknown → stop safely ------------------
